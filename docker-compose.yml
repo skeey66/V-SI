@@ -11,3 +11,34 @@ services:
       interval: 2s
       timeout: 3s
       retries: 20
+
+  planner: &agent
+    build: .
+    environment:
+      VSI_AGENT: planner
+      VSI_BASE_URL: http://planner:8000
+      VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
+    depends_on:
+      postgres: { condition: service_healthy }
+    ports: ["8001:8000"]
+  dev:
+    <<: *agent
+    environment:
+      VSI_AGENT: dev
+      VSI_BASE_URL: http://dev:8000
+      VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
+    ports: ["8002:8000"]
+  qa:
+    <<: *agent
+    environment:
+      VSI_AGENT: qa
+      VSI_BASE_URL: http://qa:8000
+      VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
+    ports: ["8003:8000"]
+  security:
+    <<: *agent
+    environment:
+      VSI_AGENT: security
+      VSI_BASE_URL: http://security:8000
+      VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
+    ports: ["8004:8000"]
