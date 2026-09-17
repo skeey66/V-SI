@@ -70,7 +70,7 @@ describe("reduceEvents", () => {
     expect(s.reworkPulse).toEqual({ revision: 2, from: "qa" });
   });
 
-  it("state_changed to=escalated는 이유를 기록한다", () => {
+  it("state_changed to=escalated는 이유를 기록한다 (remediate 경로 — agent/failure_class 없음)", () => {
     const s = reduceEvents(initialStreamState(), {
       event_id: 1, aggregate: "requirement", aggregate_id: "r1",
       event_type: "state_changed",
@@ -78,5 +78,25 @@ describe("reduceEvents", () => {
     });
     expect(s.requirementState).toBe("escalated");
     expect(s.escalationReason).toBe("max_revisions_exceeded");
+    expect(s.escalationAgent).toBeNull();
+    expect(s.escalationFailureClass).toBeNull();
+  });
+
+  it("state_changed to=escalated는 give_up 경로(agent/failure_class 포함)도 그대로 보존한다", () => {
+    const s = reduceEvents(initialStreamState(), {
+      event_id: 1, aggregate: "requirement", aggregate_id: "r1",
+      event_type: "state_changed",
+      payload: {
+        to: "escalated",
+        signal: "limit_exceeded",
+        reason: "retry_budget_exhausted",
+        agent: "dev",
+        failure_class: "timeout",
+      },
+    });
+    expect(s.requirementState).toBe("escalated");
+    expect(s.escalationReason).toBe("retry_budget_exhausted");
+    expect(s.escalationAgent).toBe("dev");
+    expect(s.escalationFailureClass).toBe("timeout");
   });
 });
