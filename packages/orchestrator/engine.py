@@ -52,11 +52,13 @@ from orchestrator.retry import (
 from orchestrator.workflow import RequirementState, WorkflowSignal, next_state
 
 logger = logging.getLogger(__name__)
-tracer = trace.get_tracer(__name__)
 
-#: 순차 파이프라인. 각 단계는 앞 단계가 끝나야 시작한다.
-PIPELINE = ["planner", "dev"]
 #: 검증 에이전트. 동시에 돌고, 둘의 verdict가 모두 도착해야 판정한다.
+#: `on_task_completed`이 "이 에이전트를 심판할 것인가"를 정하는 기준이기도 하다.
+#:
+#: 순차 단계(planner → dev)에는 대응하는 상수가 **없다**. 한때 `PIPELINE`이
+#: 있었지만 아무도 읽지 않았고, 진짜 순서는 `advance`의 분기에 있었다 —
+#: 순서가 두 곳에 적히면 갈라진다. 읽히지 않는 쪽을 지웠다.
 VERIFIERS = ["qa", "security"]
 
 TASK_SUBMITTED = "submitted"
@@ -72,11 +74,15 @@ TERMINAL_ROW_STATES = (TASK_COMPLETED, TASK_FAILED)
 
 
 def _content_hash(payload: dict) -> str:
-    """아티팩트 내용의 결정적 해시.
+    """아티팩트 내용의 결정적 해시. `artifacts.sha256`에만 쓰인다.
 
     브리프 스케치는 `str(hash(str(payload)))`를 썼지만 파이썬의 내장 `hash`는
     프로세스마다 시드가 달라(PYTHONHASHSEED) 같은 내용이 다른 값을 낳는다.
-    Task 11이 이 해시를 멱등성 키의 입력으로 쓰므로 결정적이어야 한다.
+    아티팩트 무결성 지문은 재기동을 넘어 같은 값이어야 하므로 sha256을 쓴다.
+
+    (이 docstring은 한때 "Task 11이 이 해시를 멱등성 키의 입력으로 쓴다"고
+    적고 있었다. 사실이 아니다 — 멱등성 키의 유일한 호출부는 입력 해시로 빈
+    시퀀스를 넘긴다. 결정성이 필요한 근거는 멱등성 키가 아니라 지문 자체다.)
     """
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"),
                            ensure_ascii=False)
@@ -635,7 +641,7 @@ class WorkflowEngine:
 
         **두 verdict가 모두 모였을 때만 판정한다는 전제를 Task 11도 지킨다.**
         FAIL 하나만 보고 먼저 환류를 시작하면, 아직 디스패치되지 않았거나 실행
-        중인 다른 검증 에이전트가 있는 채로 revision이 올라가 `_advance`의 검증
+        중인 다른 검증 에이전트가 있는 채로 revision이 올라가 `advance`의 검증
         루프가 회차를 넘나들며 Task를 중복 생성한다. 그래서 환류 분기는 verdict
         수 검사 **뒤에만** 있다.
         """
