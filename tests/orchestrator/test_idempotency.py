@@ -21,3 +21,14 @@ def test_revision_changes_key():
 
 def test_agent_changes_key():
     assert idempotency_key("REQ-001", "qa", 1, ["h1"]) != idempotency_key("REQ-001", "dev", 1, ["h1"])
+
+
+def test_separator_injection_does_not_collide():
+    # Logically distinct inputs must not assemble into identical material strings.
+    # Without length-prefixing, these would collide:
+    # - (A, B|1|C, 1, [D]) -> "A|B|1|C|1|D"
+    # - (A|B, 1|C, 1, [D]) -> "A|B|1|C|1|D"
+    # Length-prefixed encoding prevents this.
+    a = idempotency_key("A", "B|1|C", 1, ["D"])
+    b = idempotency_key("A|B", "1|C", 1, ["D"])
+    assert a != b
