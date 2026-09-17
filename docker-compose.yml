@@ -1,4 +1,15 @@
 services:
+  jaeger:
+    # OTel Collector를 별도로 두지 않는다 — Jaeger all-in-one이 OTLP/HTTP를
+    # 직접 받는다(서비스 하나 절약). 4318이 OTLP/HTTP 수신 포트, 16686이 UI/쿼리 API.
+    # 브리프는 `1.62`를 지정했으나 그 태그는 존재하지 않는다(레지스트리에는
+    # `1.62.0`처럼 패치 버전까지 붙은 태그만 있다) — 패치 버전을 채운
+    # `1.62.0`으로 고정한다.
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports: ["16686:16686", "4318:4318"]
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -19,6 +30,7 @@ services:
       VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
       VSI_PUSH_URL: http://orchestrator:8000/push
       VSI_PUSH_TOKEN: ${VSI_PUSH_TOKEN:-dev-only-token}
+      VSI_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
     depends_on:
       postgres: { condition: service_healthy }
     ports: ["8000:8000"]
@@ -37,6 +49,7 @@ services:
       VSI_BASE_URL: http://planner:8000
       VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
       VSI_SCENARIO: ${VSI_SCENARIO:-scenarios/all_pass.yaml}
+      VSI_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
     # 스키마 소유자는 오케스트레이터다(SDK의 tasks 테이블을 startup에서 만든다).
     # 이 의존성이 "에이전트는 오케스트레이터 준비 후에만 뜬다"를 주석이 아니라
     # 기계가 검사하는 규칙으로 만든다 — 빈 볼륨에 에이전트만 띄우면 디스패치
@@ -52,6 +65,7 @@ services:
       VSI_BASE_URL: http://dev:8000
       VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
       VSI_SCENARIO: ${VSI_SCENARIO:-scenarios/all_pass.yaml}
+      VSI_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
     ports: ["8002:8000"]
   qa:
     <<: *agent
@@ -60,6 +74,7 @@ services:
       VSI_BASE_URL: http://qa:8000
       VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
       VSI_SCENARIO: ${VSI_SCENARIO:-scenarios/all_pass.yaml}
+      VSI_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
     ports: ["8003:8000"]
   security:
     <<: *agent
@@ -68,4 +83,5 @@ services:
       VSI_BASE_URL: http://security:8000
       VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
       VSI_SCENARIO: ${VSI_SCENARIO:-scenarios/all_pass.yaml}
+      VSI_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
     ports: ["8004:8000"]
