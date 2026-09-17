@@ -1,0 +1,238 @@
+"""리컨실리에이션 루프 — 크래시 복구.
+
+**이벤트를 재생하지 않는다.** 현재 상태를 관찰해 목표 상태로 수렴시킨다
+(쿠버네티스 컨트롤러 패턴). 그래서 복구가 특수 경로가 아니라 평시에도 도는
+같은 루프이고, "크래시 복구 코드만 한 번도 안 돌아봤다"가 성립할 수 없다.
+
+관찰 대상은 두 가지뿐이다: 요구사항 행의 상태·회차와, 그 회차에 속한 Task 행들.
+그 둘만으로 다음에 할 일 하나를 고르는 것이 `next_action`이며, 순수 함수라
+DB도 컨테이너도 없이 시험할 수 있다(`tests/orchestrator/test_reconciler_plan.py`).
+
+복구하는 상태 네 가지(앞의 셋은 앞선 구현자들이 DB에서 실제로 관측한 것이다):
+
+1. **푸시가 영영 오지 않는 `working` 행.** 에이전트의 executor가 크래시하면
+   SDK는 푸시를 보내지 않는다(Task 11 실측: 정상 4회 → 크래시 2회). 디스패치
+   직후의 `get_task` 안전망도 대개 크래시 착륙 전을 읽는다. 오래 머문 행을
+   폴링해 권위 있게 다시 읽는 것 말고는 알아낼 방법이 없다.
+2. **`remediating` + 올라간 revision + 그 revision의 Task 0개.** `remediate`가
+   두 트랜잭션이라 사이에서 죽으면 남는 조합이다. 중단된 환류를 이어받는다.
+3. **`submitted` + `a2a_task_id` NULL.** `submit()` 자체가 터진 경우. 에이전트
+   쪽에 물어볼 id조차 없으므로 그 행은 실패로 확정하고 새 행으로 다시 보낸다.
+4. **오케스트레이터 자체의 SIGKILL.** 죽어 있는 동안 도착한 푸시는 전부 유실된다.
+   재기동 후 위 관찰만으로 중단 지점을 이어받는다.
+
+지키는 규칙:
+
+- **진행 중인 작업에 손대지 않는다.** 요구사항의 마지막 활동이 `stale_after_s`
+  안쪽이면 건너뛴다. 살아 있는 디스패치와 경합하지 않기 위한 첫 번째 안전장치다.
+- **Task 행은 불변이다.** 죽은 행을 되살리지 않는다. 실패로 확정하고 **새 행**을
+  만든다.
+- **한 번에 한 걸음.** 관찰 → 동작 하나 → 다음 주기에 다시 관찰. 여러 걸음을
+  한 번에 몰아 하면 중간 상태를 관찰하지 않은 채 추측으로 진행하게 된다.
+- **재시도 정책·실패 분류는 Task 12 소관이다.** 여기서는 "관측된 사실"만 기록하고
+  누락된 작업을 다시 디스패치한다. 횟수 제한도 분류도 두지 않는다.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime
+
+from sqlalchemy import func, select
+
+from orchestrator.engine import (
+    OPEN_TASK_STATES,
+    TASK_COMPLETED,
+    VERIFIERS,
+    WorkflowEngine,
+)
+from orchestrator.models import WorkflowRequirement, WorkflowTask
+from orchestrator.workflow import RequirementState
+
+logger = logging.getLogger(__name__)
+
+S = RequirementState
+
+#: 아직 끝나지 않은 요구사항 상태. 종료 상태(accepted/escalated)와 승인 대기
+#: (blocked)는 리컨실러가 건드리지 않는다 — blocked를 푸는 것은 사람이다.
+ACTIVE: tuple[RequirementState, ...] = (
+    S.PLANNED, S.IMPLEMENTING, S.VERIFYING, S.REMEDIATING,
+)
+
+PROBE = "probe"          # 에이전트에 권위 있게 물어 열린 행을 확정한다
+DISPATCH = "dispatch"    # 빠진 에이전트를 새 Task로 보낸다
+ADVANCE = "advance"      # Task는 끝났는데 상태가 따라가지 못했다
+FINISH = "finish"        # 두 verdict가 다 모였는데 판정이 유실됐다
+REMEDIATE = "remediate"  # 중단된 환류를 이어받는다
+
+DEFAULT_INTERVAL_S = 2.0
+DEFAULT_STALE_AFTER_S = 5.0
+
+
+@dataclass(frozen=True)
+class Action:
+    """요구사항 하나에 대해 지금 할 일 하나."""
+
+    kind: str
+    agents: tuple[str, ...] = ()
+    tasks: tuple[WorkflowTask, ...] = field(default=())
+
+    def __str__(self) -> str:  # 로그용
+        if self.tasks:
+            return f"{self.kind}({','.join(t.agent for t in self.tasks)})"
+        return f"{self.kind}({','.join(self.agents)})" if self.agents else self.kind
+
+
+def last_activity(req: WorkflowRequirement, rows: list[WorkflowTask]) -> datetime:
+    """이 요구사항에서 마지막으로 무언가 움직인 시각.
+
+    요구사항 행의 `updated_at`만으로는 부족하다 — 디스패치는 Task 행을 넣을 뿐
+    요구사항 행을 건드리지 않기 때문이다. 그래서 Task 행의 시각까지 함께 본다.
+    """
+    newest = req.updated_at or req.created_at
+    for t in rows:
+        for ts in (t.created_at, t.completed_at):
+            if ts is not None and ts > newest:
+                newest = ts
+    return newest
+
+
+def next_action(
+    req: WorkflowRequirement,
+    rows: list[WorkflowTask],
+    now: datetime,
+    stale_after_s: float,
+) -> Action | None:
+    """관측에서 다음 동작 하나를 고른다. 순수 함수 — 부수 효과가 없다.
+
+    `now`는 **DB 서버 시계**여야 한다(행의 시각도 전부 DB가 찍는다). 호스트와
+    컨테이너의 시계 차이가 staleness 판정에 섞이면 조용히 오작동한다.
+    """
+    state = RequirementState(req.state)
+    if state not in ACTIVE:
+        return None
+    if (now - last_activity(req, rows)).total_seconds() < stale_after_s:
+        return None  # 진행 중일 수 있다 — 손대지 않는다.
+
+    current = [t for t in rows if t.revision == req.revision]
+    open_rows = tuple(t for t in current if t.state in OPEN_TASK_STATES)
+    if open_rows:
+        # 열려 있는데 오래 조용하다. 추측하지 않고 에이전트에 직접 묻는다.
+        return Action(PROBE, tasks=open_rows)
+
+    done = {t.agent for t in current if t.state == TASK_COMPLETED}
+
+    if state is S.PLANNED:
+        return Action(DISPATCH, ("planner",)) if "planner" not in done \
+            else Action(ADVANCE, ("planner",))
+    if state is S.IMPLEMENTING:
+        return Action(DISPATCH, ("dev",)) if "dev" not in done \
+            else Action(ADVANCE, ("dev",))
+    if state is S.VERIFYING:
+        missing = tuple(v for v in VERIFIERS if v not in done)
+        return Action(DISPATCH, missing) if missing else Action(FINISH)
+    return Action(REMEDIATE)  # S.REMEDIATING
+
+
+class Reconciler:
+    def __init__(
+        self,
+        session_maker,
+        engine: WorkflowEngine,
+        interval_s: float = 10.0,
+        stale_after_s: float = DEFAULT_STALE_AFTER_S,
+    ) -> None:
+        self._sm = session_maker
+        self._engine = engine
+        self._interval = interval_s
+        self._stale_after = stale_after_s
+
+    async def reconcile_once(self) -> int:
+        """한 바퀴 돌며 수렴 동작을 수행한다. 조정한 요구사항 수를 돌려준다."""
+        async with self._sm() as s:
+            now = (await s.execute(select(func.now()))).scalar_one()
+            ids = (
+                await s.execute(
+                    select(WorkflowRequirement.requirement_id).where(
+                        WorkflowRequirement.state.in_([x.value for x in ACTIVE])
+                    )
+                )
+            ).scalars().all()
+
+        reconciled = 0
+        for requirement_id in ids:
+            try:
+                if await self._reconcile_one(requirement_id, now):
+                    reconciled += 1
+            except Exception:
+                # 요구사항 하나의 실패가 나머지를 막지 않는다. 다음 주기에 다시 본다.
+                logger.exception("리컨실 실패: %s", requirement_id)
+        return reconciled
+
+    async def run_forever(self) -> None:
+        while True:
+            try:
+                n = await self.reconcile_once()
+                if n:
+                    logger.info("리컨실: 요구사항 %d건 조정", n)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # 루프는 절대 죽지 않는다
+                logger.exception("리컨실 루프 예외 — 계속한다")
+            await asyncio.sleep(self._interval)
+
+    # ------------------------------------------------------------------ 내부
+
+    async def _reconcile_one(self, requirement_id: str, now: datetime) -> bool:
+        async with self._sm() as s:
+            # `remediate`·`maybe_finish`와 같은 규율: 요구사항 행을 잠그고 읽는다.
+            # 살아 있는 디스패치가 커밋 중이면 그 커밋 뒤의 상태를 본다.
+            req = (
+                await s.execute(
+                    select(WorkflowRequirement)
+                    .where(WorkflowRequirement.requirement_id == requirement_id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if req is None:
+                return False
+            rows = (
+                await s.execute(
+                    select(WorkflowTask).where(
+                        WorkflowTask.requirement_id == requirement_id
+                    )
+                )
+            ).scalars().all()
+            action = next_action(req, list(rows), now, self._stale_after)
+
+        if action is None:
+            return False
+        logger.info(
+            "리컨실 %s: state=%s revision=%d → %s",
+            requirement_id, req.state, req.revision, action,
+        )
+        await self._execute(requirement_id, action)
+        return True
+
+    async def _execute(self, requirement_id: str, action: Action) -> None:
+        """잠금을 놓은 뒤에 실행한다 — 엔진이 자기 트랜잭션을 열기 때문이다."""
+        if action.kind == PROBE:
+            for task in action.tasks:
+                if task.a2a_task_id is None:
+                    # 우리가 받은 id가 없다 = 에이전트 쪽 대응물을 특정할 수 없다.
+                    await self._engine.on_task_failed(task.task_id, "no_agent_task")
+                else:
+                    await self._engine.refresh_task(task.agent, task.a2a_task_id)
+        elif action.kind == DISPATCH:
+            for agent in action.agents:
+                await self._engine.dispatch_agent(requirement_id, agent)
+        elif action.kind == ADVANCE:
+            await self._engine.advance(requirement_id, action.agents[0])
+        elif action.kind == FINISH:
+            await self._engine.maybe_finish(requirement_id)
+        elif action.kind == REMEDIATE:
+            await self._engine.remediate(requirement_id)
+        else:  # pragma: no cover - 방어적
+            raise ValueError(f"알 수 없는 동작: {action.kind}")

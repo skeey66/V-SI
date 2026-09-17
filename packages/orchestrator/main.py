@@ -26,6 +26,11 @@ from orchestrator.engine import WorkflowEngine
 from orchestrator.models import Base
 from orchestrator.policy import TimeoutConfig
 from orchestrator.push_receiver import create_push_router
+from orchestrator.reconciler import (
+    DEFAULT_INTERVAL_S,
+    DEFAULT_STALE_AFTER_S,
+    Reconciler,
+)
 from orchestrator.workflow import RequirementState
 
 logging.basicConfig(level=os.environ.get("VSI_LOG_LEVEL", "INFO"))
@@ -53,6 +58,12 @@ clients = {
     for name, port in AGENTS.items()
 }
 workflow = WorkflowEngine(maker, clients, timeouts)
+reconciler = Reconciler(
+    maker,
+    workflow,
+    interval_s=float(os.environ.get("VSI_RECONCILE_INTERVAL_S", DEFAULT_INTERVAL_S)),
+    stale_after_s=float(os.environ.get("VSI_RECONCILE_STALE_S", DEFAULT_STALE_AFTER_S)),
+)
 
 app = FastAPI(title="v-si orchestrator")
 
@@ -134,8 +145,15 @@ async def _startup() -> None:
     ).initialize()
     logger.info("스키마 준비 완료")
 
+    # 리컨실리에이션 루프(Task 13)는 평시에도 돈다. 크래시 복구가 별도의 경로가
+    # 아니라 **항상 돌고 있는 같은 루프**여야, 재기동 직후에도 특별히 할 일이 없다 —
+    # 그냥 다음 주기에 현재 상태를 보고 이어서 수렴시킨다.
+    _spawn(reconciler.run_forever(), "reconciler")
+
 
 @app.on_event("shutdown")
 async def _shutdown() -> None:
+    for task in list(_background):
+        task.cancel()
     await http.aclose()
     await engine_db.dispose()

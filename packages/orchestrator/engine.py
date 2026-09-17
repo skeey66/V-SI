@@ -10,7 +10,16 @@
 4. `verdict`는 에이전트의 주장이 아니라 `exit_code`에서 도출한다.
 
 Task 10이 해피 패스를, Task 11이 환류 루프와 반복 상한을 채웠다. 재시도는
-Task 12, 리컨실리에이션은 Task 13 소관이라 아직 여기엔 없다.
+Task 12 소관이라 아직 여기엔 없다.
+
+**재개 가능한 공개 진입점**(Task 13): `dispatch_agent` / `advance` /
+`maybe_finish` / `remediate` / `refresh_task` / `on_task_failed`는 리컨실러가
+바깥에서 부른다. 크래시는 이 엔진을 호출 사슬 중간에서 끊어 놓으므로, 각 단계가
+**끊긴 지점부터 다시 불릴 수 있어야** 한다. 리컨실러가 상태 기계를 흉내 내지
+않게 하려면(전이 규칙이 두 곳에 생기면 반드시 갈라진다) 그 단계들이 사유화된
+채로 남아 있어선 안 된다. 대신 각 메서드는 자기 전제를 스스로 검사한다 —
+`maybe_finish`는 VERIFYING인지와 verdict 개수를, `remediate`는 REMEDIATING인지와
+이번 회차가 소비됐는지를 확인한다.
 """
 
 from __future__ import annotations
@@ -20,7 +29,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from orchestrator.a2a_client import TERMINAL_TASK_STATES, AgentClient
 from orchestrator.idempotency import idempotency_key
@@ -39,6 +48,13 @@ VERIFIERS = ["qa", "security"]
 TASK_SUBMITTED = "submitted"
 TASK_WORKING = "working"
 TASK_COMPLETED = "completed"
+#: 에이전트 Task가 산출물 없이 죽었다. `verdict == "FAIL"`(정상 완료, 산출물 있음)과는
+#: 다른 것이다 — 이 행은 되살릴 수 없고 새 행으로 대체된다(Task 13).
+TASK_FAILED = "failed"
+
+#: 아직 결과가 확정되지 않은 Task 행. 리컨실러(Task 13)가 이 상태의 행만 캔다.
+OPEN_TASK_STATES = (TASK_SUBMITTED, TASK_WORKING)
+TERMINAL_ROW_STATES = (TASK_COMPLETED, TASK_FAILED)
 
 
 def _content_hash(payload: dict) -> str:
@@ -91,12 +107,29 @@ class WorkflowEngine:
         """에이전트 1기에 작업을 제출한다.
 
         공개 메서드다 — Task 13의 리컨실리에이터가 바깥에서 호출한다.
+
+        `attempt`는 같은 (요구사항, 에이전트, 회차)에 이미 있는 행 수 + 1이다.
+        크래시로 죽은 행을 대체하는 디스패치가 몇 번째인지를 사실로 기록할 뿐
+        **횟수 제한이나 실패 분류는 하지 않는다** — 재시도 정책은 Task 12 소관이다.
+        멱등성 키에도 이 번호가 들어간다(유니크 제약이 있는데 Task 행은 불변이라
+        새 행을 만들어야 하므로, 회차만으로는 키가 충돌한다).
         """
         async with self._sm() as s:
             req = await s.get(WorkflowRequirement, requirement_id)
             if req is None:
                 raise LookupError(f"알 수 없는 requirement_id: {requirement_id}")
-            key = idempotency_key(requirement_id, agent, req.revision, [])
+            attempt = (
+                await s.execute(
+                    select(func.count())
+                    .select_from(WorkflowTask)
+                    .where(
+                        WorkflowTask.requirement_id == requirement_id,
+                        WorkflowTask.agent == agent,
+                        WorkflowTask.revision == req.revision,
+                    )
+                )
+            ).scalar_one() + 1
+            key = idempotency_key(requirement_id, agent, req.revision, [], attempt)
             # 계보 연결: Task 행은 불변이므로 환류는 직전 회차 행을 고쳐 쓰지 않고
             # 새 행을 만들어 `revision_of`로 가리킨다. 첫 회차(revision 1)에는
             # 직전 회차가 없어 자연히 NULL이 된다.
@@ -118,6 +151,7 @@ class WorkflowEngine:
                 revision=req.revision,
                 idempotency_key=key,
                 state=TASK_SUBMITTED,
+                attempt=attempt,
                 revision_of=prev.task_id if prev is not None else None,
             )
             s.add(task)
@@ -131,6 +165,7 @@ class WorkflowEngine:
                     "agent": agent,
                     "requirement_id": requirement_id,
                     "revision": req.revision,
+                    "attempt": attempt,
                 },
             )
             await s.commit()
@@ -151,9 +186,7 @@ class WorkflowEngine:
         # (푸시 시각 P와 행 커밋 시각 W에 대해: P > W면 푸시가 처리하고, P < W면
         #  이 조회 시각 G > W > P이므로 조회가 종료 상태를 본다. 양쪽이 겹쳐도
         #  on_task_completed가 행 잠금으로 직렬화하고 중복을 버린다.)
-        snapshot = await self._clients[agent].get_task(a2a_id)
-        if snapshot.is_terminal:
-            await self.on_task_completed(a2a_id, snapshot.payload)
+        await self.refresh_task(agent, a2a_id)
 
     # ------------------------------------------------------------ 완료 처리
 
@@ -193,10 +226,80 @@ class WorkflowEngine:
             logger.info("상관시킬 수 없는 푸시를 버린다: %s", a2a_task_id)
             return
 
+        await self.refresh_task(agent, a2a_task_id)
+
+    async def refresh_task(self, agent: str, a2a_task_id: str) -> str:
+        """에이전트에 권위 있게 물어 우리 행을 현재 사실에 맞춘다.
+
+        완료 감지 경로가 하나로 모인다: 디스패치 직후 안전망도, 푸시 콜백도,
+        리컨실러(Task 13)도 전부 이 메서드를 통한다 — "어떻게 알게 됐는가"에
+        따라 판정이 갈라지면 안 되기 때문이다. 결과 상태를 문자열로 돌려준다.
+
+        **종료했는데 산출물이 하나도 없으면 executor 크래시로 본다.** verdict
+        FAIL도 A2A 상태로는 `TASK_STATE_FAILED`라(스텁이 `updater.failed()`를
+        부른다) 상태 이름만으로는 둘을 구분할 수 없다. 구분하는 것은 산출물의
+        유무다: 정상 실행은 exit_code가 0이든 아니든 아티팩트를 남기고, 크래시한
+        실행은 아무것도 남기지 못한다.
+        """
         snapshot = await self._clients[agent].get_task(a2a_task_id)
         if not snapshot.is_terminal:
-            return
-        await self.on_task_completed(a2a_task_id, snapshot.payload)
+            return snapshot.state
+        if snapshot.payload:
+            await self.on_task_completed(a2a_task_id, snapshot.payload)
+            return TASK_COMPLETED
+
+        async with self._sm() as s:
+            t = (
+                await s.execute(
+                    select(WorkflowTask).where(
+                        WorkflowTask.a2a_task_id == a2a_task_id
+                    )
+                )
+            ).scalar_one_or_none()
+            task_id = t.task_id if t is not None else None
+        if task_id is None:
+            logger.warning("알 수 없는 a2a_task_id: %s", a2a_task_id)
+            return TASK_FAILED
+        await self.on_task_failed(task_id, snapshot.state)
+        return TASK_FAILED
+
+    async def on_task_failed(self, task_id: str, observed: str) -> None:
+        """Task 행을 실패로 확정한다. **관측된 사실만** 기록한다.
+
+        여기서 재시도하지 않는다 — 누락된 작업을 다시 디스패치하는 것은 수렴
+        루프(리컨실러)의 몫이고, 재시도 정책과 실패 분류(`failure_class`)는
+        Task 12 소관이라 비워 둔다. 이 메서드가 하는 일은 "이 행은 더 이상
+        기다릴 대상이 아니다"를 영속화하는 것뿐이다.
+
+        Task 행은 불변이라는 규칙은 지켜진다: 완료된 행은 건드리지 않고, 열린
+        행만 종료 상태로 확정한다. 대체 작업은 **새 행**으로 만들어진다.
+        """
+        async with self._sm() as s:
+            t = (
+                await s.execute(
+                    select(WorkflowTask)
+                    .where(WorkflowTask.task_id == task_id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if t is None or t.state in TERMINAL_ROW_STATES:
+                return  # 이미 확정됐다(중복 관측).
+            t.state = TASK_FAILED
+            t.completed_at = datetime.now(timezone.utc)
+            record_event(
+                s,
+                "task",
+                t.task_id,
+                "task_failed",
+                {
+                    "agent": t.agent,
+                    "requirement_id": t.requirement_id,
+                    "revision": t.revision,
+                    "attempt": t.attempt,
+                    "observed": observed,
+                },
+            )
+            await s.commit()
 
     async def on_task_completed(self, a2a_task_id: str, payload: dict) -> None:
         """완료된 Task를 기록하고 다음 단계를 결정한다.
@@ -216,8 +319,8 @@ class WorkflowEngine:
             if t is None:
                 logger.warning("알 수 없는 a2a_task_id: %s", a2a_task_id)
                 return
-            if t.state == TASK_COMPLETED:
-                return  # 중복 알림. Task 행은 불변이므로 되돌리지 않는다.
+            if t.state in TERMINAL_ROW_STATES:
+                return  # 중복 알림(또는 이미 실패 확정). Task 행은 불변이라 되돌리지 않는다.
 
             t.state = TASK_COMPLETED
             t.completed_at = datetime.now(timezone.utc)
@@ -247,11 +350,11 @@ class WorkflowEngine:
             await s.commit()
             requirement_id, agent = t.requirement_id, t.agent
 
-        await self._advance(requirement_id, agent)
+        await self.advance(requirement_id, agent)
 
     # -------------------------------------------------------------- 진행 결정
 
-    async def _advance(self, requirement_id: str, finished_agent: str) -> None:
+    async def advance(self, requirement_id: str, finished_agent: str) -> None:
         if finished_agent == "planner":
             await self._transition(requirement_id, WorkflowSignal.PLAN_READY)
             await self.dispatch_agent(requirement_id, "dev")
@@ -263,7 +366,7 @@ class WorkflowEngine:
             for verifier in VERIFIERS:
                 await self.dispatch_agent(requirement_id, verifier)
         else:
-            await self._maybe_finish(requirement_id)
+            await self.maybe_finish(requirement_id)
 
     async def _transition(self, requirement_id: str, signal: WorkflowSignal) -> None:
         async with self._sm() as s:
@@ -284,7 +387,7 @@ class WorkflowEngine:
             )
             await s.commit()
 
-    async def _maybe_finish(self, requirement_id: str) -> None:
+    async def maybe_finish(self, requirement_id: str) -> None:
         """qa/security 두 verdict가 모두 도착했을 때만 판정한다.
 
         두 콜백이 동시에 들어오면 둘 다 "verdict 2개"를 보고 각자 전이를 시도해
@@ -341,9 +444,9 @@ class WorkflowEngine:
         # REMEDIATING이라, 뒤늦게 락을 얻은 다른 verdict 콜백은 위의 VERIFYING
         # 가드에 걸려 되돌아간다 — 환류가 두 번 시작되지 않는다.
         if failed:
-            await self._remediate(requirement_id)
+            await self.remediate(requirement_id)
 
-    async def _remediate(self, requirement_id: str) -> None:
+    async def remediate(self, requirement_id: str) -> None:
         """반복 상한을 확인하고, 남아 있으면 revision을 올려 새 dev Task를 만든다.
 
         상한은 워크플로 층(요구사항 행의 `max_revisions`)에 있다 — 에이전트가
@@ -351,6 +454,13 @@ class WorkflowEngine:
 
         되돌리는 대신 앞으로 간다: 기존 Task 행은 그대로 두고 revision을 올려
         dev부터 새 행을 만든다(`dispatch_agent`가 `revision_of`로 계보를 잇는다).
+
+        **다시 불러도 안전하다**(Task 13). 이 메서드는 두 트랜잭션이라(회차 증가 /
+        상태 전이) 사이에서 프로세스가 죽으면 `remediating` + 올라간 revision +
+        그 revision의 Task 0개가 남는다. 리컨실러가 그 상태를 보고 이 메서드를
+        다시 부르므로, 회차를 **두 번** 올리지 않도록 "이번 회차가 이미 소비됐는가"
+        (= 이번 revision에 Task 행이 있는가)를 증가 조건으로 둔다. 상한 검사도
+        증가할 때만 한다 — 이미 올라간 회차는 그때 검사를 통과한 것이다.
         """
         async with self._sm() as s:
             req = (
@@ -360,8 +470,20 @@ class WorkflowEngine:
                     .with_for_update()
                 )
             ).scalar_one()
-            exceeded = req.revision >= req.max_revisions
-            if not exceeded:
+            if RequirementState(req.state) is not RequirementState.REMEDIATING:
+                return  # 다른 경로가 이미 이 환류를 진행시켰다.
+            consumed = (
+                await s.execute(
+                    select(func.count())
+                    .select_from(WorkflowTask)
+                    .where(
+                        WorkflowTask.requirement_id == requirement_id,
+                        WorkflowTask.revision == req.revision,
+                    )
+                )
+            ).scalar_one() > 0
+            exceeded = consumed and req.revision >= req.max_revisions
+            if consumed and not exceeded:
                 req.revision += 1
                 record_event(
                     s,
