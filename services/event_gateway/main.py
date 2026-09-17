@@ -6,11 +6,20 @@
 자신의 DB 연결·자기 자신의 FastAPI 앱만 가진다(스키마는 여전히
 오케스트레이터가 소유 — 여기서는 `Base.metadata.create_all`을 부르지 않는다).
 
-재시작 복구: `_resume_position`이 시작 시 `published_at IS NOT NULL`인 행 중
-가장 큰 `event_id`를 찾아 그 지점부터 이어서 테일한다. 게이트웨이가 죽어
-있던 동안 쌓인 행은 `published_at`이 NULL인 채로 DB에 남아 있으므로
-`event_id > last_id` 조건에 그대로 걸려 유실 없이 따라잡는다. 이미 발행한
-행을 다시 보내지 않는 것도 같은 커서 덕분이다.
+폴링·전달 로직(커서 재개, at-least-once 전달)은 `event_gateway.pump`에
+있다 — 이 파일은 FastAPI 배선(라우트, lifespan, OTel 계측)만 맡는다. 둘을
+가른 이유: 이 파일은 import 시점에 `VSI_DATABASE_URL` 환경변수를 필수로
+읽고 OTel 전역 TracerProvider를 고정한다(`setup_tracing`) — 둘 다 실제
+컨테이너 실행 환경 밖에서, 특히 같은 pytest 프로세스 안에서 다른 테스트와
+공유되는 전역 상태를 오염시키는 부작용이다(리뷰 라운드 1에서 실측: 이
+모듈을 단위 시험이 직접 import하자 `tests/agent_runtime/test_telemetry.py`가
+자기 TracerProvider를 못 심고 조용히 깨졌다). `pump.py`는 이런 부작용이
+전혀 없어 단위 시험이 안전하게 직접 부를 수 있다.
+
+재시작 복구: `pump.resume_position`이 시작 시 `published_at IS NOT NULL`인
+행 중 가장 큰 `event_id`를 찾아 그 지점부터 이어서 테일한다. 게이트웨이가
+죽어 있던 동안 쌓인 행은 `published_at`이 NULL인 채로 DB에 남아 있으므로
+`event_id > last_id` 조건에 그대로 걸려 유실 없이 따라잡는다.
 """
 
 from __future__ import annotations
@@ -19,14 +28,17 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from sqlalchemy import func, select
 
 from agent_runtime.telemetry import instrument_app, setup_tracing
 from orchestrator.db import make_engine, session_factory
-from orchestrator.models import OutboxEvent
+from services.event_gateway.pump import pump_once, resume_position, tail_outbox
+
+# `tail_outbox`를 여기로도 재노출한다 — 브리프가 명시한 공개 인터페이스
+# (`tail_outbox(session_maker, last_id, limit=100) -> list[dict]`)가 이
+# 모듈에 있다는 기대를 깨지 않기 위해서다.
+__all__ = ["app", "tail_outbox"]
 
 logging.basicConfig(level=os.environ.get("VSI_LOG_LEVEL", "INFO"))
 logger = logging.getLogger("event_gateway")
@@ -45,87 +57,19 @@ _maker = session_factory(_engine)
 _clients: set[WebSocket] = set()
 
 
-async def _resume_position(session_maker) -> int:
-    """마지막으로 발행한 이벤트의 event_id. 발행 이력이 없으면 0.
-
-    재시작 시 여기서부터 이어서 테일해야, 게이트웨이가 죽어 있던 동안 쌓인
-    (미발행) 이벤트는 놓치지 않으면서 이미 내보낸 이벤트를 중복 재전송하지
-    않는다.
-    """
-    async with session_maker() as s:
-        max_id = (
-            await s.execute(
-                select(func.max(OutboxEvent.event_id)).where(
-                    OutboxEvent.published_at.is_not(None)
-                )
-            )
-        ).scalar()
-        return max_id or 0
-
-
-async def tail_outbox(session_maker, last_id: int, limit: int = 100) -> list[dict]:
-    """`last_id`보다 큰 아웃박스 행을 읽고, 같은 트랜잭션에서 published_at을 찍는다.
-
-    본문(payload)은 그대로 통과시킨다 — 가공·요약·필터링하지 않는다. UI와
-    수용 테스트가 이 필드들을 그대로 읽는다.
-    """
-    async with session_maker() as s:
-        rows = (
-            await s.execute(
-                select(OutboxEvent)
-                .where(OutboxEvent.event_id > last_id)
-                .order_by(OutboxEvent.event_id)
-                .limit(limit)
-            )
-        ).scalars().all()
-        out = []
-        for r in rows:
-            out.append(
-                {
-                    "event_id": r.event_id,
-                    "aggregate": r.aggregate,
-                    "aggregate_id": r.aggregate_id,
-                    "event_type": r.event_type,
-                    "payload": r.payload,
-                }
-            )
-            r.published_at = datetime.now(timezone.utc)
-        await s.commit()
-        return out
-
-
 async def _pump() -> None:
     """마지막 published 지점 이후부터 이어서 테일하는 상시 루프.
-
-    연결된 클라이언트가 하나도 없으면 이번 사이클은 그냥 건너뛴다 —
-    `tail_outbox`를 부르지 않으니 `published_at`도 찍히지 않고 커서(`last_id`)도
-    그대로다. 그래야 재기동 직후 클라이언트가 붙기 전에 백로그를 아무도 없이
-    "발행"해버려서, 뒤늦게 연결한 클라이언트가 그 사이 쌓인 이벤트를 영영 못
-    받는 사고를 막는다. 대가는 UI 쪽 지연뿐이다 — 클라이언트가 붙는 순간
-    다음 폴에서 밀린 이벤트가 한꺼번에 나간다.
 
     한 사이클에서 예외가 나도(일시적 DB 단절 등) 루프 자체는 죽지 않는다 —
     로그를 남기고 다음 폴에서 같은 last_id부터 재시도한다.
     """
-    last_id = await _resume_position(_maker)
+    last_id = await resume_position(_maker)
     logger.info("아웃박스 테일 시작: last_id=%d", last_id)
     while True:
-        if not _clients:
-            await asyncio.sleep(POLL_S)
-            continue
         try:
-            events = await tail_outbox(_maker, last_id)
+            last_id = await pump_once(_maker, _clients, last_id)
         except Exception:
             logger.exception("아웃박스 폴링 실패, %.1f초 뒤 재시도", POLL_S)
-            await asyncio.sleep(POLL_S)
-            continue
-        for event in events:
-            last_id = event["event_id"]
-            for ws in list(_clients):
-                try:
-                    await ws.send_json(event)
-                except Exception:
-                    _clients.discard(ws)
         await asyncio.sleep(POLL_S)
 
 
