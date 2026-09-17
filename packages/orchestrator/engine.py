@@ -9,8 +9,11 @@
    새 행을 만든다(Task 11·12).
 4. `verdict`는 에이전트의 주장이 아니라 `exit_code`에서 도출한다.
 
-Task 10이 해피 패스를, Task 11이 환류 루프와 반복 상한을 채웠다. 재시도는
-Task 12 소관이라 아직 여기엔 없다.
+Task 10이 해피 패스를, Task 11이 환류 루프와 반복 상한을 채웠다. Task 12는
+`submit()` 왕복이 그 자리에서 터지는 경우(전송/실행/독성입력)에 재시도·백오프를
+붙였다. 제출은 됐는데 그 뒤 executor가 크래시해 푸시가 안 오는 경우는 여전히
+리컨실러(Task 13)의 몫이다 — 두 실패는 "아직 Task가 생기지 않았다" vs "Task는
+생겼는데 죽었다"로 층이 다르다.
 
 **재개 가능한 공개 진입점**(Task 13): `dispatch_agent` / `advance` /
 `maybe_finish` / `remediate` / `refresh_task` / `on_task_failed`는 리컨실러가
@@ -24,6 +27,7 @@ Task 12 소관이라 아직 여기엔 없다.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -36,6 +40,7 @@ from orchestrator.idempotency import idempotency_key
 from orchestrator.models import Artifact, WorkflowRequirement, WorkflowTask
 from orchestrator.outbox import record_event
 from orchestrator.policy import TimeoutConfig
+from orchestrator.retry import FailureClass, backoff_seconds, classify, max_attempts
 from orchestrator.workflow import RequirementState, WorkflowSignal, next_state
 
 logger = logging.getLogger(__name__)
@@ -109,10 +114,19 @@ class WorkflowEngine:
         공개 메서드다 — Task 13의 리컨실리에이터가 바깥에서 호출한다.
 
         `attempt`는 같은 (요구사항, 에이전트, 회차)에 이미 있는 행 수 + 1이다.
-        크래시로 죽은 행을 대체하는 디스패치가 몇 번째인지를 사실로 기록할 뿐
-        **횟수 제한이나 실패 분류는 하지 않는다** — 재시도 정책은 Task 12 소관이다.
-        멱등성 키에도 이 번호가 들어간다(유니크 제약이 있는데 Task 행은 불변이라
-        새 행을 만들어야 하므로, 회차만으로는 키가 충돌한다).
+        크래시로 죽은 행을 대체하는 디스패치가 몇 번째인지를 사실로 기록할 뿐,
+        **이 번호 자체에는 상한이 없다** — 반복 재디스패치를 몇 번까지 허용할지는
+        리컨실러의 `next_action`이 결정한다(Task 12, 캡은 관측된 실패 행 수와
+        `failure_class`로 계산한다). 멱등성 키에도 이 번호가 들어간다(유니크
+        제약이 있는데 Task 행은 불변이라 새 행을 만들어야 하므로, 회차만으로는
+        키가 충돌한다).
+
+        `submit()` 자체가 그 자리에서 터지면(연결 거부·5xx·스키마 오류 등)
+        아직 에이전트 쪽에 Task가 생기지 않았으므로 **같은 행, 같은 멱등성
+        키로 그 자리에서 재시도한다**(Task 12) — 새 행을 만드는 것은 이미
+        디스패치된 뒤 죽은 경우(리컨실러 소관)에만 해당한다. 재시도 예산을
+        다 쓰면 이 행을 실패로 확정하고 분류를 남긴다. `refresh_task`는 그
+        경우 부르지 않는다 — 물어볼 `a2a_task_id`가 없다.
         """
         async with self._sm() as s:
             req = await s.get(WorkflowRequirement, requirement_id)
@@ -171,14 +185,61 @@ class WorkflowEngine:
             await s.commit()
             task_id = task.task_id
 
-        a2a_id = await self._clients[agent].submit(
-            {"requirement_id": requirement_id}, key
-        )
+        # 딕셔너리 조회는 재시도 루프 **밖**에 둔다: 알 수 없는 에이전트는 설정
+        # 오류이지 제출 실패가 아니다 — `KeyError`로 그 자리에서 터져야 한다
+        # (분류·재시도 대상은 `client.submit()`이 던지는 예외뿐이다).
+        client = self._clients[agent]
+
+        a2a_id: str | None = None
+        last_failure: FailureClass | None = None
+        submit_attempt = 1
+        while True:
+            try:
+                a2a_id = await asyncio.wait_for(
+                    client.submit({"requirement_id": requirement_id}, key),
+                    timeout=self._timeouts.tool_s,
+                )
+                break
+            except Exception as exc:
+                last_failure = classify(exc)
+                if submit_attempt >= max_attempts(last_failure):
+                    logger.warning(
+                        "%s 제출을 %d회 만에 포기한다 (%s): %s",
+                        agent, submit_attempt, last_failure.value, exc,
+                    )
+                    break
+                await asyncio.sleep(backoff_seconds(submit_attempt))
+                submit_attempt += 1
 
         async with self._sm() as s:
             t = await s.get(WorkflowTask, task_id)
-            t.a2a_task_id, t.state = a2a_id, TASK_WORKING
+            if a2a_id is None:
+                t.state = TASK_FAILED
+                t.failure_class = last_failure.value
+                t.completed_at = datetime.now(timezone.utc)
+                record_event(
+                    s,
+                    "task",
+                    task_id,
+                    "task_failed",
+                    {
+                        "agent": agent,
+                        "requirement_id": requirement_id,
+                        "revision": t.revision,
+                        "attempt": t.attempt,
+                        "failure_class": last_failure.value,
+                        "submit_attempts": submit_attempt,
+                        "observed": "submit_raised",
+                    },
+                )
+            else:
+                t.a2a_task_id, t.state = a2a_id, TASK_WORKING
             await s.commit()
+
+        if a2a_id is None:
+            # 재시도 예산을 다 썼다. 이 행은 종결됐다 — 다시 보낼지는 리컨실러의
+            # `next_action`이 관측된 실패 행 수로 결정한다(Task 12의 캡).
+            return
 
         # 경합 구간 닫기: 에이전트가 a2a_task_id를 우리가 적기도 전에 끝내고 푸시를
         # 보냈을 수 있다. 그런 푸시는 상관시킬 행이 없어 버려지므로, 행을 적은 직후
@@ -260,16 +321,24 @@ class WorkflowEngine:
         if task_id is None:
             logger.warning("알 수 없는 a2a_task_id: %s", a2a_task_id)
             return TASK_FAILED
-        await self.on_task_failed(task_id, snapshot.state)
+        # 산출물 없이 종료했다 = executor가 크래시했다는 뜻이다(위 docstring).
+        # 원인 불명의 실행 중 오류이므로 EXECUTION으로 분류한다.
+        await self.on_task_failed(task_id, snapshot.state, FailureClass.EXECUTION)
         return TASK_FAILED
 
-    async def on_task_failed(self, task_id: str, observed: str) -> None:
-        """Task 행을 실패로 확정한다. **관측된 사실만** 기록한다.
+    async def on_task_failed(
+        self,
+        task_id: str,
+        observed: str,
+        failure_class: FailureClass | None = None,
+    ) -> None:
+        """Task 행을 실패로 확정한다. **관측된 사실**과 그 분류를 함께 남긴다.
 
-        여기서 재시도하지 않는다 — 누락된 작업을 다시 디스패치하는 것은 수렴
-        루프(리컨실러)의 몫이고, 재시도 정책과 실패 분류(`failure_class`)는
-        Task 12 소관이라 비워 둔다. 이 메서드가 하는 일은 "이 행은 더 이상
-        기다릴 대상이 아니다"를 영속화하는 것뿐이다.
+        여기서 재시도하지 않는다 — 누락된 작업을 다시 디스패치할지, 몇 번까지
+        허용할지는 수렴 루프(리컨실러)의 `next_action`이 결정한다(Task 12).
+        이 메서드가 하는 일은 "이 행은 더 이상 기다릴 대상이 아니다"와 "왜
+        끝났는가"를 영속화하는 것뿐이다 — `failure_class`가 리컨실러의 캡
+        계산 입력이 된다.
 
         Task 행은 불변이라는 규칙은 지켜진다: 완료된 행은 건드리지 않고, 열린
         행만 종료 상태로 확정한다. 대체 작업은 **새 행**으로 만들어진다.
@@ -285,6 +354,7 @@ class WorkflowEngine:
             if t is None or t.state in TERMINAL_ROW_STATES:
                 return  # 이미 확정됐다(중복 관측).
             t.state = TASK_FAILED
+            t.failure_class = failure_class.value if failure_class else None
             t.completed_at = datetime.now(timezone.utc)
             record_event(
                 s,
@@ -297,6 +367,7 @@ class WorkflowEngine:
                     "revision": t.revision,
                     "attempt": t.attempt,
                     "observed": observed,
+                    "failure_class": t.failure_class,
                 },
             )
             await s.commit()
@@ -541,6 +612,42 @@ class WorkflowEngine:
             return
         await self._transition(requirement_id, WorkflowSignal.DEV_DONE)
         await self.dispatch_agent(requirement_id, "dev")
+
+    async def give_up(self, requirement_id: str) -> None:
+        """재시도 예산을 다 쓴 에이전트가 있으면 요구사항을 포기 상태로 보낸다.
+
+        공개 메서드다 — 리컨실러의 `next_action`이 관측(실패 행 수와
+        `failure_class`)에서 이미 "이 에이전트는 더 재시도해도 소용없다"를
+        판단했다(Task 12의 캡). 여기서는 그 판단을 실행해 상태를 ESCALATED로
+        확정할 뿐, 판단 자체를 다시 하지 않는다 — 판단 로직이 두 곳에 있으면
+        갈라진다는 형제 메서드들의 규율을 그대로 따른다.
+
+        `remediate`의 LIMIT_EXCEEDED(반복 상한 초과)와 같은 목적지지만 출발
+        상태가 다르다: `remediate`는 REMEDIATING에서만 부르므로 이미 그
+        전제를 확인했지만, `give_up`은 PLANNED/IMPLEMENTING/VERIFYING 중
+        어디서나 불릴 수 있어 **먼저 관측한 상태를 `expected`로 넘겨** 그
+        사이에 다른 경로가 먼저 전이시켰으면(`_transition`이 False) 조용히
+        돌아간다.
+        """
+        async with self._sm() as s:
+            req = await s.get(WorkflowRequirement, requirement_id)
+        if req is None:
+            return
+        observed = RequirementState(req.state)
+        if observed not in (
+            RequirementState.PLANNED,
+            RequirementState.IMPLEMENTING,
+            RequirementState.VERIFYING,
+        ):
+            return  # 이미 다른 경로가 끝냈거나(터미널) REMEDIATING(다른 메서드 소관).
+        transitioned = await self._transition(
+            requirement_id, WorkflowSignal.LIMIT_EXCEEDED, expected=observed
+        )
+        if not transitioned:
+            logger.info(
+                "포기 전이를 건너뛴다: %s는 %s를 기대했으나 이미 움직였다",
+                requirement_id, observed.value,
+            )
 
     # ------------------------------------------------------------------ 조회
 

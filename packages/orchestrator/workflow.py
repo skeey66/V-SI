@@ -39,6 +39,14 @@ _TABLE: dict[tuple[RequirementState, WorkflowSignal], RequirementState] = {
     (S.VERIFYING, Sig.VERDICTS_FAIL): S.REMEDIATING,
     (S.REMEDIATING, Sig.DEV_DONE): S.IMPLEMENTING,
     (S.REMEDIATING, Sig.LIMIT_EXCEEDED): S.ESCALATED,
+    # Task 12: 재시도 상한(캡)을 넘긴 에이전트는 반드시 REMEDIATING에서만
+    # 나오지 않는다 — planner/dev가 영원히 크래시하면 PLANNED/IMPLEMENTING에서,
+    # 검증 에이전트가 영원히 크래시하면 VERIFYING에서 리컨실러가 포기를
+    # 결정한다(`engine.give_up`). 같은 신호를 재사용한다: "몇 번을 시도해도
+    # 끝나지 않는다"는 의미가 같기 때문이다.
+    (S.PLANNED, Sig.LIMIT_EXCEEDED): S.ESCALATED,
+    (S.IMPLEMENTING, Sig.LIMIT_EXCEEDED): S.ESCALATED,
+    (S.VERIFYING, Sig.LIMIT_EXCEEDED): S.ESCALATED,
 }
 
 
