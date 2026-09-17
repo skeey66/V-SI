@@ -42,6 +42,27 @@ services:
       retries: 30
       start_period: 5s
 
+  event-gateway:
+    # 오케스트레이터와 별도 프로세스다 — UI가 죽거나 WebSocket이 밀려도
+    # 워크플로는 이 컨테이너와 무관하게 계속 돈다. `orchestrator`가 healthy가
+    # 되어야 스키마(events 등)가 존재한다 — 스키마 소유자는 오케스트레이터
+    # 한 곳뿐이라 여기서는 create_all을 부르지 않는다.
+    build: .
+    command: ["uvicorn", "event_gateway.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
+      VSI_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
+    depends_on:
+      postgres: { condition: service_healthy }
+      orchestrator: { condition: service_healthy }
+    ports: ["8100:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=3).status == 200 else 1)"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
   planner: &agent
     build: .
     environment:
