@@ -22,6 +22,7 @@ dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "websockets>=13.0"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+pythonpath = ["packages"]
 
 [tool.setuptools.packages.find]
 where = ["packages"]
