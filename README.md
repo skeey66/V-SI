@@ -33,7 +33,7 @@ LLM을 한 번도 호출하지 않고 오케스트레이션 전 구간이 동작
 
 ## 기술 스택
 
-Python 3.11 · FastAPI · `a2a-sdk` 1.x (A2A 스펙 1.0, HTTP+JSON) · PostgreSQL ·
-OpenTelemetry → Jaeger · React · pytest · Docker
+Python 3.11 · FastAPI · `a2a-sdk` 1.1.2 (A2A 스펙 1.0, HTTP+JSON) · PostgreSQL ·
+OpenTelemetry (+ `instrumentation-fastapi` / `-httpx`) → Jaeger · React · pytest · Docker
 
 SP2에서 추가: MCP Python SDK · Ruff · mypy · Bandit · Semgrep · Playwright
