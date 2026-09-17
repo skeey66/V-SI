@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+build/
+
+# 환경
+.env
+.env.*
+!.env.example
+
+# 브레인스토밍 세션 산출물 (설계 화면은 docs/design-screens/에 별도 보관)
+.superpowers/
+
+# OS / 에디터
+.DS_Store
+.idea/
+.vscode/
