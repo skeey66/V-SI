@@ -338,15 +338,28 @@ idempotency_key = sha256(requirement_id | agent | revision | attempt)
 
 ### 타임아웃 계층
 
-| 계층 | 기본값 |
-|---|---|
-| MCP 도구 실행 (SP2) | 30초 |
-| AgentExecutor 작업 | 5분 |
-| 워크플로 단계 | 15분 |
-| 실행(run) 전체 | 60분 |
+| 계층 | 설정 키 | 기본값 | SP1에서의 배선 |
+|---|---|---|---|
+| 도구 실행 (SP2의 MCP 도구) | `tool_s` | 30초 | **집행됨** — 에이전트로 나가는 왕복 하나를 `asyncio.wait_for`로 감싼다 (`engine.dispatch_agent`의 `submit`, `engine.refresh_task`의 `get_task`) |
+| AgentExecutor 작업 | `executor_s` | 5분 | **집행됨** — 공유 httpx 클라이언트의 요청당 타임아웃. `tool_s`가 먼저 끊으므로 실질적으로는 backstop |
+| 워크플로 단계 | `step_s` | 15분 | 배선 없음 |
+| 실행(run) 전체 | `run_s` | 60분 | 배선 없음 — **SP2 자리표시자** |
 
 **안쪽 < 바깥쪽 부등식을 설정 로딩 시점에 검증하고, 위반 시 기동을 실패시킨다.**
 바깥이 먼저 터지면 안쪽 실패 원인을 잃고 트레이스에 원인 없는 취소만 남는다.
+설정 값이 숫자가 아닌 경우도 같은 `TimeoutConfigError`로 보고한다 — `from_env`가
+`orchestrator/main.py`의 import 시점에 돌기 때문에, 맨 `ValueError`가 나가면
+컨테이너가 정체 불명의 예외로 죽는다.
+
+**부등식이 검증된다는 것과 네 층이 전부 집행된다는 것은 다르다.** `step_s`·`run_s`를
+배선하지 않은 것은 누락이 아니라 선택이다: SP1의 종료 보장은 시간 예산이 아니라
+**리컨실러의 관측**(열린 행 나이 천장 `stuck_after_s`, 실패 행 수 재시도 캡) 위에 서
+있고, 모든 요구사항이 종료 상태에 도달한다는 보장은 이미 그쪽에서 나온다. 같은 보장을
+시간 축에서 한 번 더 집행하면 두 기준이 서로 다른 순간에 발동해, 요구사항을 끝낸 것이
+어느 쪽인지 운영자가 구분할 수 없게 된다. SP2에서 실제 LLM 지연이 붙어 "느린 것"과
+"멈춘 것"을 나이만으로 가르기 어려워지면 그때 `run_s`를 리컨실러의 요구사항 나이
+backstop으로 배선한다(§12.2). 층별 현황은 `packages/orchestrator/policy.py`의 모듈
+docstring에도 같은 표로 있다.
 
 ### 크래시 복구
 
