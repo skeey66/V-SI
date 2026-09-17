@@ -22,6 +22,13 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
     ports: ["8000:8000"]
+    # 이미지에 curl/wget이 없다(python:3.11-slim). 표준 라이브러리로 때린다.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=3).status == 200 else 1)"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
 
   planner: &agent
     build: .
@@ -30,8 +37,13 @@ services:
       VSI_BASE_URL: http://planner:8000
       VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
       VSI_SCENARIO: ${VSI_SCENARIO:-scenarios/all_pass.yaml}
+    # 스키마 소유자는 오케스트레이터다(SDK의 tasks 테이블을 startup에서 만든다).
+    # 이 의존성이 "에이전트는 오케스트레이터 준비 후에만 뜬다"를 주석이 아니라
+    # 기계가 검사하는 규칙으로 만든다 — 빈 볼륨에 에이전트만 띄우면 디스패치
+    # 시점에 UndefinedTable로 터지기 때문이다.
     depends_on:
       postgres: { condition: service_healthy }
+      orchestrator: { condition: service_healthy }
     ports: ["8001:8000"]
   dev:
     <<: *agent
