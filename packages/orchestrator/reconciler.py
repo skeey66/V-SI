@@ -62,6 +62,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from opentelemetry import trace
 from sqlalchemy import func, select
 
 from orchestrator.engine import (
@@ -76,6 +77,7 @@ from orchestrator.retry import FailureClass, max_attempts
 from orchestrator.workflow import RequirementState
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 S = RequirementState
 
@@ -228,6 +230,11 @@ class Reconciler:
         self._interval = interval_s
         self._stale_after = stale_after_s
         self._stuck_after = stuck_after_s
+        # 운영 신호 1(Task 14): 같은 task_id가 PROBE된 반복 횟수. a2a-sdk 1.1.2가
+        # 종료 전이를 누락하면(리컨실러 docstring 참고) 이 값이 매 주기 계속
+        # 올라간다 — "PROBE가 비정상적으로 오래 반복된다"는 그 자체로는 로그를
+        # 뒤져야 알 수 있던 증상을 span 속성으로 바로 드러낸다.
+        self._probe_counts: dict[str, int] = {}
 
     async def reconcile_once(self) -> int:
         """한 바퀴 돌며 수렴 동작을 수행한다. 조정한 요구사항 수를 돌려준다."""
@@ -295,47 +302,83 @@ class Reconciler:
             "리컨실 %s: state=%s revision=%d → %s",
             requirement_id, req.state, req.revision, action,
         )
-        await self._execute(requirement_id, action)
+        await self._execute(requirement_id, action, now)
         return True
 
-    async def _execute(self, requirement_id: str, action: Action) -> None:
-        """잠금을 놓은 뒤에 실행한다 — 엔진이 자기 트랜잭션을 열기 때문이다."""
-        if action.kind == PROBE:
-            for task in action.tasks:
-                if task.a2a_task_id is None:
-                    # 우리가 받은 id가 없다 = 에이전트 쪽 대응물을 특정할 수 없다.
-                    # submit() 왕복 자체가 안 됐다는 뜻이라 TRANSPORT로 분류한다.
-                    await self._engine.on_task_failed(
-                        task.task_id, "no_agent_task", FailureClass.TRANSPORT
-                    )
-                else:
-                    await self._engine.refresh_task(task.agent, task.a2a_task_id)
-        elif action.kind == DISPATCH:
-            for agent in action.agents:
-                await self._engine.dispatch_agent(requirement_id, agent)
-        elif action.kind == ADVANCE:
-            await self._engine.advance(requirement_id, action.agents[0])
-        elif action.kind == FINISH:
-            await self._engine.maybe_finish(requirement_id)
-        elif action.kind == REMEDIATE:
-            await self._engine.remediate(requirement_id)
-        elif action.kind == GIVE_UP:
-            # 여러 에이전트가 동시에 예산을 다 썼어도(드물다 — qa·security가
-            # 같은 주기에 함께 소진) 전이는 한 번만 성공한다. 첫 번째 뒤엔
-            # 상태가 이미 ESCALATED라 이후 호출은 engine.give_up의 expected
-            # 가드에 걸려 조용히 반환된다 — 두 번째 이후 에이전트의 사유는
-            # 이벤트에 남지 않지만, 상태 전이가 중복되거나 터지지는 않는다.
-            for task in action.tasks:
-                fc = FailureClass(task.failure_class) if task.failure_class else FailureClass.EXECUTION
-                await self._engine.give_up(requirement_id, task.agent, fc)
-        elif action.kind == FORCE_FAIL:
-            # 리뷰 라운드 1: PROBE로도 끝나지 않는 행(SDK 결함으로 종료 상태가
-            # 영영 안 오는 경우)에 대한 안전망. 더 묻지 않고 실행 중 원인
-            # 불명 오류로 확정한다 — 이후로는 평범한 실패 행이라 다음 주기의
-            # 캡 계산이 정상적으로 이어받는다.
-            for task in action.tasks:
-                await self._engine.on_task_failed(
-                    task.task_id, "stuck_beyond_ceiling", FailureClass.EXECUTION
-                )
-        else:  # pragma: no cover - 방어적
-            raise ValueError(f"알 수 없는 동작: {action.kind}")
+    async def _execute(self, requirement_id: str, action: Action, now: datetime) -> None:
+        """잠금을 놓은 뒤에 실행한다 — 엔진이 자기 트랜잭션을 열기 때문이다.
+
+        `now`는 `next_action`이 이 동작을 고를 때 쓴 것과 같은 DB 서버 시계
+        스냅샷이다 — PROBE 반복·FORCE_FAIL 시점의 "행 나이"를 재는 기준을
+        판정 로직과 일치시킨다(운영 신호 1·2, Task 14).
+        """
+        with tracer.start_as_current_span(
+            f"reconciler.{action.kind}",
+            attributes={"vsi.requirement_id": requirement_id},
+        ):
+            if action.kind == PROBE:
+                for task in action.tasks:
+                    if task.a2a_task_id is None:
+                        # 우리가 받은 id가 없다 = 에이전트 쪽 대응물을 특정할 수 없다.
+                        # submit() 왕복 자체가 안 됐다는 뜻이라 TRANSPORT로 분류한다.
+                        await self._engine.on_task_failed(
+                            task.task_id, "no_agent_task", FailureClass.TRANSPORT
+                        )
+                        continue
+                    # 운영 신호 1: 이 task_id가 PROBE된 반복 횟수와, PROBE 시점의
+                    # 열린 행 나이(대략적인 "실행 지속 시간"). a2a-sdk 1.1.2의
+                    # 종료 전이 누락 버그는 이 span 하나만 봐도 드러난다 —
+                    # 반복 횟수가 계속 올라가는데 나이도 같이 올라가면 그 태스크는
+                    # 절대 안 끝난다는 뜻이다.
+                    self._probe_counts[task.task_id] = self._probe_counts.get(task.task_id, 0) + 1
+                    with tracer.start_as_current_span(
+                        "reconciler.probe_task",
+                        attributes={
+                            "vsi.task_id": task.task_id,
+                            "vsi.agent": task.agent,
+                            "vsi.probe.repetition": self._probe_counts[task.task_id],
+                            "vsi.task.open_age_s": (now - task.created_at).total_seconds(),
+                        },
+                    ):
+                        await self._engine.refresh_task(task.agent, task.a2a_task_id)
+            elif action.kind == DISPATCH:
+                for agent in action.agents:
+                    await self._engine.dispatch_agent(requirement_id, agent)
+            elif action.kind == ADVANCE:
+                await self._engine.advance(requirement_id, action.agents[0])
+            elif action.kind == FINISH:
+                await self._engine.maybe_finish(requirement_id)
+            elif action.kind == REMEDIATE:
+                await self._engine.remediate(requirement_id)
+            elif action.kind == GIVE_UP:
+                # 여러 에이전트가 동시에 예산을 다 썼어도(드물다 — qa·security가
+                # 같은 주기에 함께 소진) 전이는 한 번만 성공한다. 첫 번째 뒤엔
+                # 상태가 이미 ESCALATED라 이후 호출은 engine.give_up의 expected
+                # 가드에 걸려 조용히 반환된다 — 두 번째 이후 에이전트의 사유는
+                # 이벤트에 남지 않지만, 상태 전이가 중복되거나 터지지는 않는다.
+                for task in action.tasks:
+                    fc = FailureClass(task.failure_class) if task.failure_class else FailureClass.EXECUTION
+                    await self._engine.give_up(requirement_id, task.agent, fc)
+            elif action.kind == FORCE_FAIL:
+                # 리뷰 라운드 1: PROBE로도 끝나지 않는 행(SDK 결함으로 종료 상태가
+                # 영영 안 오는 경우)에 대한 안전망. 더 묻지 않고 실행 중 원인
+                # 불명 오류로 확정한다 — 이후로는 평범한 실패 행이라 다음 주기의
+                # 캡 계산이 정상적으로 이어받는다.
+                for task in action.tasks:
+                    # 운영 신호 2: FORCE_FAIL이 발동하는 순간의 열린 행 나이.
+                    # `stuck_after_s`(기본 60초)는 지금까지 추측값이었다 — 이
+                    # 분포가 쌓여야 그 값을 근거를 갖고 조정할 수 있다.
+                    with tracer.start_as_current_span(
+                        "reconciler.force_fail",
+                        attributes={
+                            "vsi.task_id": task.task_id,
+                            "vsi.agent": task.agent,
+                            "vsi.task.open_age_s": (now - task.created_at).total_seconds(),
+                            "vsi.stuck_after_s": self._stuck_after,
+                        },
+                    ):
+                        await self._engine.on_task_failed(
+                            task.task_id, "stuck_beyond_ceiling", FailureClass.EXECUTION
+                        )
+            else:  # pragma: no cover - 방어적
+                raise ValueError(f"알 수 없는 동작: {action.kind}")

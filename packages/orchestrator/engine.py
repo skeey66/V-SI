@@ -33,6 +33,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
+from opentelemetry import trace
 from sqlalchemy import func, select
 
 from orchestrator.a2a_client import TERMINAL_TASK_STATES, AgentClient
@@ -50,6 +51,7 @@ from orchestrator.retry import (
 from orchestrator.workflow import RequirementState, WorkflowSignal, next_state
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 #: 순차 파이프라인. 각 단계는 앞 단계가 끝나야 시작한다.
 PIPELINE = ["planner", "dev"]
@@ -90,6 +92,11 @@ class WorkflowEngine:
         self._sm = session_maker
         self._clients = clients
         self._timeouts = timeouts
+        # 운영 신호 3(Task 14): `_transition`이 "전이를 건너뛴다"로 되돌아간
+        # 횟수를 요구사항별로 센다. 한 번의 스킵은 정상적인 자기 치유(경합 후
+        # 재관찰)지만, **반복되는** 스킵은 수렴이 아니라 정체다 — 이 카운터가
+        # 그 둘을 Jaeger span 이벤트만으로 구분하게 해 준다(로그를 안 봐도 된다).
+        self._transition_skip_counts: dict[str, int] = {}
 
     # ---------------------------------------------------------------- 진입점
 
@@ -516,6 +523,21 @@ class WorkflowEngine:
                 logger.info(
                     "전이를 건너뛴다: %s는 %s를 기대했으나 이미 %s다",
                     requirement_id, expected.value, req.state,
+                )
+                skip_count = self._transition_skip_counts.get(requirement_id, 0) + 1
+                self._transition_skip_counts[requirement_id] = skip_count
+                trace.get_current_span().add_event(
+                    "vsi.transition_skipped",
+                    {
+                        "vsi.requirement_id": requirement_id,
+                        "vsi.expected_state": expected.value,
+                        "vsi.actual_state": req.state,
+                        "vsi.signal": signal.value,
+                        # 1회는 정상적인 자기 치유다 — 이 값이 계속 올라가면
+                        # 정체(standstill)다. 로그가 아니라 이 span 이벤트가
+                        # 그 구분의 유일한 신호다.
+                        "vsi.transition_skip_count": skip_count,
+                    },
                 )
                 return False
             req.state = next_state(RequirementState(req.state), signal).value
