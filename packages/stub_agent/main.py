@@ -5,6 +5,7 @@ from a2a.server.tasks import DatabaseTaskStore
 
 from agent_runtime.app import create_agent_app
 from agent_runtime.card import build_card
+from agent_runtime.telemetry import setup_tracing
 from orchestrator.db import make_engine
 from stub_agent.executor import ARTIFACT_KIND, StubExecutor
 from stub_agent.scenario import AgentScenario
@@ -15,6 +16,12 @@ AGENT = os.environ["VSI_AGENT"]
 SCENARIO = os.environ.get("VSI_SCENARIO", "scenarios/qa_fails_twice.yaml")
 BASE_URL = os.environ["VSI_BASE_URL"]
 DB_URL = os.environ["VSI_DATABASE_URL"]
+
+# `setup_tracing`은 `create_agent_app`의 `instrument_app`/`instrumented_client`
+# 보다 먼저 불러야 한다 — 계측 라이브러리는 계측 시점에 전역 TracerProvider를
+# 얻어 고정하므로, 순서가 뒤집히면 실제 익스포터 없는 기본 provider에 묶인다.
+# `VSI_OTLP_ENDPOINT`가 없으면(예: 로컬 단위 테스트) 익스포트 없이 조용히 넘어간다.
+setup_tracing(AGENT, endpoint=os.environ.get("VSI_OTLP_ENDPOINT"))
 
 scenario = AgentScenario.from_yaml(SCENARIO, AGENT)
 card = build_card(
