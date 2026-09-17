@@ -95,3 +95,47 @@ async def test_advance_transitions_when_premise_holds(session) -> None:
             assert RequirementState(req.state) is RequirementState.IMPLEMENTING
     finally:
         await db.dispose()
+
+
+@pytest.mark.parametrize(
+    "state",
+    [RequirementState.PLANNED, RequirementState.IMPLEMENTING, RequirementState.VERIFYING],
+)
+async def test_give_up_transitions_when_premise_holds(session, state) -> None:
+    """Task 12: 리컨실러가 캡을 넘겼다고 판단한 상태 그대로면 ESCALATED로 간다."""
+    rid = f"REQ-G-giveup-{state.value}"
+    db, maker, workflow = await _engine_over(rid, state, session)
+    try:
+        await workflow.give_up(rid)
+        async with maker() as s:
+            req = await s.get(WorkflowRequirement, rid)
+            assert RequirementState(req.state) is RequirementState.ESCALATED
+    finally:
+        await db.dispose()
+
+
+async def test_give_up_does_nothing_when_state_already_moved_on(session) -> None:
+    """전이 사이에 다른 경로가 먼저 끝냈으면(예: ACCEPTED) 아무 것도 하지 않는다."""
+    rid = "REQ-G-giveup-moved"
+    db, maker, workflow = await _engine_over(rid, RequirementState.ACCEPTED, session)
+    try:
+        await workflow.give_up(rid)  # 터지지 않는다 — IllegalTransition을 던지지 않는다
+        await _assert_untouched(maker, rid, RequirementState.ACCEPTED)
+    finally:
+        await db.dispose()
+
+
+async def test_give_up_does_not_touch_remediating(session) -> None:
+    """REMEDIATING의 반복 상한은 `remediate` 소관이다 — `give_up`이 가로채지 않는다.
+
+    두 메서드가 같은 신호(`LIMIT_EXCEEDED`)로 같은 목적지(ESCALATED)에 가지만,
+    "누가 그 판단을 내리는가"는 상태별로 하나로 고정돼야 한다 — 안 그러면
+    회차 증가 로직(`remediate`의 두 트랜잭션) 없이 REMEDIATING을 건너뛸 수 있다.
+    """
+    rid = "REQ-G-giveup-remediating"
+    db, maker, workflow = await _engine_over(rid, RequirementState.REMEDIATING, session)
+    try:
+        await workflow.give_up(rid)
+        await _assert_untouched(maker, rid, RequirementState.REMEDIATING)
+    finally:
+        await db.dispose()
