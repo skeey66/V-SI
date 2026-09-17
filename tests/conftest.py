@@ -5,7 +5,7 @@ from orchestrator.db import make_engine
 from orchestrator.models import Base
 
 TEST_DB_URL = os.environ.get(
-    "VSI_TEST_DATABASE_URL", "postgresql+asyncpg://vsi:vsi@localhost:5432/vsi"
+    "VSI_TEST_DATABASE_URL", "postgresql+asyncpg://vsi:vsi@localhost:55432/vsi"
 )
 
 
