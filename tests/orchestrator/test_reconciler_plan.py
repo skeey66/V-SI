@@ -15,6 +15,7 @@ from orchestrator.reconciler import (
     ADVANCE,
     DISPATCH,
     FINISH,
+    GIVE_UP,
     PROBE,
     REMEDIATE,
     next_action,
@@ -47,17 +48,20 @@ def _task(
     age_s: float = OLD,
     a2a_task_id: str | None = "a2a-1",
     verdict: str | None = None,
+    attempt: int = 1,
+    failure_class: str | None = None,
 ):
     return WorkflowTask(
-        task_id=f"task-{agent}-{revision}-{state}",
+        task_id=f"task-{agent}-{revision}-{state}-{attempt}",
         requirement_id="REQ-X",
         agent=agent,
         revision=revision,
         a2a_task_id=a2a_task_id,
-        idempotency_key=f"key-{agent}-{revision}-{state}",
+        idempotency_key=f"key-{agent}-{revision}-{state}-{attempt}",
         state=state,
         verdict=verdict,
-        attempt=1,
+        attempt=attempt,
+        failure_class=failure_class,
         created_at=NOW - timedelta(seconds=age_s),
         completed_at=NOW - timedelta(seconds=age_s) if state == "completed" else None,
     )
@@ -192,6 +196,80 @@ def test_previous_revision_rows_do_not_count_as_progress() -> None:
     assert _plan(req, rows) == _dispatch("dev")
 
 
+# -------------------------------------------- 재시도 상한(캡): 영원히 크래시하는 에이전트
+
+
+def test_single_crash_is_still_within_budget() -> None:
+    """실패가 한 번뿐이면(EXECUTION 상한 2) 아직 예산이 남아 있다 — 계속 재시도한다.
+
+    `test_failed_row_is_superseded_by_a_new_dispatch`와 같은 사실을 캡의
+    관점에서 다시 고정한다: 캡이 생겼다고 정당한 재시도(Task 13의 기존 동작)가
+    막히면 안 된다.
+    """
+    req = _req(RequirementState.IMPLEMENTING)
+    rows = [
+        _task("planner", "completed"),
+        _task("dev", "failed", failure_class="execution", attempt=1),
+    ]
+    assert _plan(req, rows) == _dispatch("dev")
+
+
+def test_repeated_execution_crashes_exhaust_budget_and_give_up() -> None:
+    """EXECUTION 상한은 2 — 두 번째 크래시에서 예산이 바닥나 포기한다.
+
+    영원히 크래시하는 에이전트를 리컨실러가 끝없이 재디스패치하지 않는다는
+    계약이다(Task 12). Task 행은 그대로 두고(불변) 더 이상 새 행을 만들지 않는다.
+    """
+    req = _req(RequirementState.IMPLEMENTING)
+    rows = [
+        _task("planner", "completed"),
+        _task("dev", "failed", failure_class="execution", attempt=1),
+        _task("dev", "failed", failure_class="execution", attempt=2),
+    ]
+    assert _plan(req, rows) == _give_up("dev")
+
+
+def test_transport_budget_is_larger_than_execution() -> None:
+    """TRANSPORT 상한은 3 — EXECUTION이면 포기했을 실패 횟수에서도 아직 재시도한다."""
+    req = _req(RequirementState.IMPLEMENTING)
+    rows = [
+        _task("planner", "completed"),
+        _task("dev", "failed", failure_class="transport", attempt=1),
+        _task("dev", "failed", failure_class="transport", attempt=2),
+    ]
+    assert _plan(req, rows) == _dispatch("dev")
+
+
+def test_poison_never_gets_a_second_try() -> None:
+    """POISON 상한은 1 — 첫 실패에서 바로 포기한다(재시도해도 결정적으로 같다)."""
+    req = _req(RequirementState.PLANNED)
+    rows = [_task("planner", "failed", failure_class="poison", attempt=1)]
+    assert _plan(req, rows) == _give_up("planner")
+
+
+def test_unclassified_failure_falls_back_to_execution_budget() -> None:
+    """`failure_class`가 비어 있던 옛 실패 행도 캡이 있어야 한다 — EXECUTION으로 본다."""
+    req = _req(RequirementState.PLANNED)
+    rows = [
+        _task("planner", "failed", failure_class=None, attempt=1),
+        _task("planner", "failed", failure_class=None, attempt=2),
+    ]
+    assert _plan(req, rows) == _give_up("planner")
+
+
+def test_exhausted_verifier_gives_up_during_verifying() -> None:
+    """검증 에이전트도 같은 캡을 받는다 — verifying 도중에도 영원히 돌지 않는다."""
+    req = _req(RequirementState.VERIFYING)
+    rows = [
+        _task("planner", "completed"),
+        _task("dev", "completed"),
+        _task("qa", "completed", verdict="PASS"),
+        _task("security", "failed", failure_class="execution", attempt=1),
+        _task("security", "failed", failure_class="execution", attempt=2),
+    ]
+    assert _plan(req, rows) == _give_up("security")
+
+
 def _dispatch(*agents: str):
     from orchestrator.reconciler import Action
 
@@ -202,3 +280,9 @@ def _advance(agent: str):
     from orchestrator.reconciler import Action
 
     return Action(ADVANCE, (agent,))
+
+
+def _give_up(*agents: str):
+    from orchestrator.reconciler import Action
+
+    return Action(GIVE_UP, tuple(agents))

@@ -31,6 +31,14 @@ DB도 컨테이너도 없이 시험할 수 있다(`tests/orchestrator/test_recon
   한 번에 몰아 하면 중간 상태를 관찰하지 않은 채 추측으로 진행하게 된다.
 - **재시도 정책·실패 분류는 Task 12 소관이다.** 여기서는 "관측된 사실"만 기록하고
   누락된 작업을 다시 디스패치한다. 횟수 제한도 분류도 두지 않는다.
+
+Task 12 추가: **재시도 상한(캡)**. `dispatch_agent`의 `attempt`(= 그 회차의 행 수)에는
+스스로 상한이 없다 — 영원히 크래시하는 에이전트가 있으면 리컨실러가 영원히
+재디스패치한다. 그래서 캡을 여기(`next_action`)에 둔다: 관측된 실패 행 수가
+`retry.max_attempts(failure_class)`에 닿으면 DISPATCH 대신 `GIVE_UP`을 고른다.
+캡의 근거는 리컨실리에이션 로직 자체(관찰→동작 매핑)가 아니라 "몇 번이나
+시도했는가"라는 순수 관측이므로, 여기 두어도 리컨실러 소관을 벗어나지 않는다
+(엔진의 상태 전이 규칙 자체는 여전히 `workflow.py`와 `engine._transition`에만 있다).
 """
 
 from __future__ import annotations
@@ -45,10 +53,12 @@ from sqlalchemy import func, select
 from orchestrator.engine import (
     OPEN_TASK_STATES,
     TASK_COMPLETED,
+    TASK_FAILED,
     VERIFIERS,
     WorkflowEngine,
 )
 from orchestrator.models import WorkflowRequirement, WorkflowTask
+from orchestrator.retry import FailureClass, max_attempts
 from orchestrator.workflow import RequirementState
 
 logger = logging.getLogger(__name__)
@@ -66,6 +76,7 @@ DISPATCH = "dispatch"    # 빠진 에이전트를 새 Task로 보낸다
 ADVANCE = "advance"      # Task는 끝났는데 상태가 따라가지 못했다
 FINISH = "finish"        # 두 verdict가 다 모였는데 판정이 유실됐다
 REMEDIATE = "remediate"  # 중단된 환류를 이어받는다
+GIVE_UP = "give_up"      # 재시도 예산을 다 썼다 — 더 디스패치하지 않고 포기한다
 
 DEFAULT_INTERVAL_S = 2.0
 DEFAULT_STALE_AFTER_S = 5.0
@@ -99,6 +110,23 @@ def last_activity(req: WorkflowRequirement, rows: list[WorkflowTask]) -> datetim
     return newest
 
 
+def _budget_exhausted(current: list[WorkflowTask], agent: str) -> bool:
+    """이 회차에서 `agent`의 실패 행 수가 분류별 재시도 상한에 닿았는가.
+
+    행이 불변이라는 규칙과 맞물린다 — 캡을 넘겼다고 기존 실패 행을 지우거나
+    고치지 않는다. 그저 **새 행을 더 만들지 않을 뿐**이다. `failure_class`가
+    비어 있는 실패(옛 행, 또는 `submit()` 이전에 죽어 분류가 안 된 경우)는
+    EXECUTION으로 본다 — POISON(1회)만큼 성급하지 않고 TRANSPORT(3회)만큼
+    낙관적이지도 않은 중간값이다.
+    """
+    failed = [t for t in current if t.agent == agent and t.state == TASK_FAILED]
+    if not failed:
+        return False
+    worst = max(failed, key=lambda t: t.attempt)
+    fc = FailureClass(worst.failure_class) if worst.failure_class else FailureClass.EXECUTION
+    return len(failed) >= max_attempts(fc)
+
+
 def next_action(
     req: WorkflowRequirement,
     rows: list[WorkflowTask],
@@ -125,14 +153,23 @@ def next_action(
     done = {t.agent for t in current if t.state == TASK_COMPLETED}
 
     if state is S.PLANNED:
-        return Action(DISPATCH, ("planner",)) if "planner" not in done \
-            else Action(ADVANCE, ("planner",))
+        if "planner" in done:
+            return Action(ADVANCE, ("planner",))
+        if _budget_exhausted(current, "planner"):
+            return Action(GIVE_UP, ("planner",))
+        return Action(DISPATCH, ("planner",))
     if state is S.IMPLEMENTING:
-        return Action(DISPATCH, ("dev",)) if "dev" not in done \
-            else Action(ADVANCE, ("dev",))
+        if "dev" in done:
+            return Action(ADVANCE, ("dev",))
+        if _budget_exhausted(current, "dev"):
+            return Action(GIVE_UP, ("dev",))
+        return Action(DISPATCH, ("dev",))
     if state is S.VERIFYING:
         missing = tuple(v for v in VERIFIERS if v not in done)
-        return Action(DISPATCH, missing) if missing else Action(FINISH)
+        if not missing:
+            return Action(FINISH)
+        exhausted = tuple(v for v in missing if _budget_exhausted(current, v))
+        return Action(GIVE_UP, exhausted) if exhausted else Action(DISPATCH, missing)
     return Action(REMEDIATE)  # S.REMEDIATING
 
 
@@ -222,7 +259,10 @@ class Reconciler:
             for task in action.tasks:
                 if task.a2a_task_id is None:
                     # 우리가 받은 id가 없다 = 에이전트 쪽 대응물을 특정할 수 없다.
-                    await self._engine.on_task_failed(task.task_id, "no_agent_task")
+                    # submit() 왕복 자체가 안 됐다는 뜻이라 TRANSPORT로 분류한다.
+                    await self._engine.on_task_failed(
+                        task.task_id, "no_agent_task", FailureClass.TRANSPORT
+                    )
                 else:
                     await self._engine.refresh_task(task.agent, task.a2a_task_id)
         elif action.kind == DISPATCH:
@@ -234,5 +274,7 @@ class Reconciler:
             await self._engine.maybe_finish(requirement_id)
         elif action.kind == REMEDIATE:
             await self._engine.remediate(requirement_id)
+        elif action.kind == GIVE_UP:
+            await self._engine.give_up(requirement_id)
         else:  # pragma: no cover - 방어적
             raise ValueError(f"알 수 없는 동작: {action.kind}")
