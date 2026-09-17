@@ -1,0 +1,270 @@
+:root {
+  --bg: #10131a;
+  --panel: #161b25;
+  --panel-2: #1c2230;
+  --line: #2a3142;
+  --line-strong: #465067;
+  --text: #e7ebf3;
+  --text-muted: #8993a8;
+  --text-faint: #5b6478;
+
+  --c-orchestrator: #7c8dfb;
+  --c-planner: #3fbf93;
+  --c-dev: #e3ac48;
+  --c-qa: #4fa3e0;
+  --c-security: #e2707a;
+
+  --c-pass: #3fbf93;
+  --c-fail: #e2707a;
+  --c-error: #f0a24a;
+  --c-rework: #b298f4;
+
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.vsi-root {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  min-height: 100vh;
+  padding: 28px 32px 40px;
+  box-sizing: border-box;
+}
+
+.vsi-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.vsi-title {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.vsi-title .vsi-dim {
+  color: var(--text-faint);
+  font-weight: 500;
+  margin-left: 8px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.vsi-status-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.vsi-status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 6px;
+}
+.vsi-status-dot.open { background: var(--c-pass); box-shadow: 0 0 6px var(--c-pass); }
+.vsi-status-dot.connecting { background: var(--c-error); animation: vsi-blink 1s infinite; }
+.vsi-status-dot.closed { background: var(--c-fail); animation: vsi-blink 1s infinite; }
+
+.vsi-state-pill {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.vsi-state-pill.escalated { border-color: var(--c-fail); color: var(--c-fail); }
+.vsi-state-pill.accepted { border-color: var(--c-pass); color: var(--c-pass); }
+
+.vsi-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(260px, 0.9fr);
+  gap: 24px;
+}
+
+@media (max-width: 860px) {
+  .vsi-layout { grid-template-columns: 1fr; }
+}
+
+.vsi-canvas-wrap {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px;
+}
+
+.vsi-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  border-radius: 10px;
+}
+
+.vsi-empty-title {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+.vsi-empty-sub {
+  font-size: 12px;
+  color: var(--text-faint);
+  max-width: 320px;
+  line-height: 1.5;
+}
+
+.vsi-node-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  fill: var(--text);
+  text-transform: lowercase;
+}
+
+.vsi-node-sub {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  fill: var(--text-faint);
+}
+
+.vsi-badge-text {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  fill: #10131a;
+}
+
+.vsi-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.vsi-panel-title {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 0 0 10px;
+}
+
+.vsi-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-y: auto;
+  max-height: 420px;
+}
+
+.vsi-log-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  animation: vsi-log-in 240ms ease-out;
+}
+
+.vsi-log-type {
+  color: var(--text-muted);
+}
+
+.vsi-log-agent {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.vsi-log-detail {
+  color: var(--text-faint);
+  font-size: 11px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.vsi-log-detail.pass { color: var(--c-pass); }
+.vsi-log-detail.fail { color: var(--c-fail); }
+.vsi-log-detail.error { color: var(--c-error); }
+.vsi-log-detail.rework { color: var(--c-rework); }
+
+@keyframes vsi-log-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes vsi-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+.vsi-node-active .vsi-node-core {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: vsi-node-pulse 1.1s ease-in-out infinite;
+}
+
+.vsi-node-glow {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: vsi-glow-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes vsi-node-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.12); }
+}
+
+@keyframes vsi-glow-pulse {
+  0%, 100% { opacity: 0.2; }
+  50% { opacity: 0.55; }
+}
+
+.vsi-rework-arc {
+  animation: vsi-arc-flow 900ms linear infinite;
+}
+
+@keyframes vsi-arc-flow {
+  from { stroke-dashoffset: 22; }
+  to { stroke-dashoffset: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vsi-status-dot.connecting, .vsi-status-dot.closed { animation: none; }
+  .vsi-log-row { animation: none; }
+  .vsi-node-active .vsi-node-core { animation: none; }
+  .vsi-node-glow { animation: none; opacity: 0.4; }
+  .vsi-rework-arc { animation: none; }
+}

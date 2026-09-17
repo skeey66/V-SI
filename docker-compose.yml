@@ -106,3 +106,20 @@ services:
       VSI_SCENARIO: ${VSI_SCENARIO:-scenarios/all_pass.yaml}
       VSI_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
     ports: ["8004:8000"]
+
+  web:
+    # Task 16: 실시간 에이전트 그래프. 이벤트 게이트웨이의 WebSocket(8100)에
+    # 브라우저에서 직접 붙는다 — 브라우저는 컴포즈 네트워크 밖에 있으므로
+    # 컨테이너 내부 이름이 아니라 호스트에 노출된 포트로 접속해야 한다
+    # (AgentGraph.tsx의 URL이 `ws://localhost:8100/ws`인 이유).
+    #
+    # 브리프는 `node:22-alpine`을 지정했으나 이 환경의 레지스트리 프록시에서
+    # 그 태그만 계속 0바이트로 멈췄다(`node:20-alpine`, `hello-world`는 정상
+    # 다운로드됨 — 실측으로 다른 태그를 확인). Vite 5는 Node 18+면 충분해
+    # `20-alpine`(LTS, 정상적으로 받아지는 태그)으로 고정한다.
+    image: node:20-alpine
+    working_dir: /app
+    volumes: ["./web:/app"]
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    depends_on: [event-gateway]
+    ports: ["5173:5173"]
