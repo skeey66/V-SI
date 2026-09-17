@@ -1,5 +1,5 @@
 from __future__ import annotations
-import time
+import asyncio
 
 from google.protobuf import struct_pb2
 from google.protobuf.json_format import ParseDict
@@ -43,6 +43,10 @@ class StubExecutor(AgentExecutor):
     - Payload(dict)를 아티팩트에 담으려면 `a2a.types.Part(data=...)`가 필요하고,
       `data` 필드는 protobuf `google.protobuf.Value`이므로
       `google.protobuf.json_format.ParseDict`로 변환한다.
+    - `build_payload`는 동기 메서드로 유지한다(단위 테스트가 직접 호출한다). 대신
+      `latency_ms` 지연은 `execute()`에서 `await asyncio.sleep(...)`로 처리한다 —
+      동기 `time.sleep`을 여기 두면 이벤트 루프 전체가 블로킹돼 Task 8/10에서
+      에이전트를 동시 기동/병렬 디스패치할 때 알 수 없는 직렬화를 일으킨다.
 
     `attempt`는 이 스텁 자신의 호출 순번이다(`AgentScenario.next_attempt()`가 관리) —
     오케스트레이터의 재시도 카운터(`workflow_tasks.attempt`)와는 이름만 같은 별개의
@@ -63,8 +67,6 @@ class StubExecutor(AgentExecutor):
             attempt = self.scenario.next_attempt()
         if self.scenario.failure_for_attempt(attempt) == "crash":
             raise StubCrash(f"{self.agent} attempt {attempt} 크래시 주입")
-        if self.scenario.latency_ms:
-            time.sleep(self.scenario.latency_ms / 1000)
 
         verdict = self.scenario.next_verdict()
         payload: dict = {"kind": ARTIFACT_KIND[self.agent], "agent": self.agent}
@@ -89,6 +91,9 @@ class StubExecutor(AgentExecutor):
 
         # attempt를 넘기지 않는다 — 시나리오 자신의 호출 카운터가 운영 경로다.
         payload = self.build_payload()
+        if self.scenario.latency_ms:
+            # 동기 sleep이 아니라 await로 지연시켜 이벤트 루프를 막지 않는다.
+            await asyncio.sleep(self.scenario.latency_ms / 1000)
 
         await updater.add_artifact([_payload_to_part(payload)], name=payload["kind"])
         if payload["exit_code"] == 0:
