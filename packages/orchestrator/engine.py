@@ -355,20 +355,55 @@ class WorkflowEngine:
     # -------------------------------------------------------------- 진행 결정
 
     async def advance(self, requirement_id: str, finished_agent: str) -> None:
+        """끝난 에이전트에 따라 다음 단계를 연다.
+
+        **전제를 스스로 검사한다**(형제 메서드 `maybe_finish`·`remediate`와 같은
+        규율). 리컨실러는 요구사항 행의 잠금을 놓은 뒤에 이 메서드를 부르므로, 그
+        사이에 푸시가 도착해 상태가 먼저 움직일 수 있다. 그때는 아무 것도 하지 않고
+        돌아간다 — 이미 다른 경로가 같은 일을 했다는 뜻이다. 예외로 알리지 않는
+        이유는 이것이 **오류가 아니라 정상적인 경합 결과**이기 때문이다(다음 리컨실
+        주기가 현재 상태를 다시 관찰한다).
+
+        전제 검사는 `_transition`의 잠금 **안에서** 일어난다. 여기서 따로 읽고
+        나서 전이하면 그 둘 사이가 다시 창이 되어, 막으려던 경합이 그대로 남는다.
+        """
         if finished_agent == "planner":
-            await self._transition(requirement_id, WorkflowSignal.PLAN_READY)
+            if not await self._transition(
+                requirement_id, WorkflowSignal.PLAN_READY,
+                expected=RequirementState.PLANNED,
+            ):
+                return
             await self.dispatch_agent(requirement_id, "dev")
         elif finished_agent == "dev":
-            await self._transition(requirement_id, WorkflowSignal.DEV_DONE)
+            if not await self._transition(
+                requirement_id, WorkflowSignal.DEV_DONE,
+                expected=RequirementState.IMPLEMENTING,
+            ):
+                return
             # 디스패치는 순차지만 실행은 병렬이다: submit은 Task 생성 즉시
             # 반환하므로(return_immediately) qa와 security는 각자의 프로세스에서
             # 동시에 돈다.
             for verifier in VERIFIERS:
                 await self.dispatch_agent(requirement_id, verifier)
         else:
+            # 검증 에이전트는 자기 차례에 전이를 만들지 않는다. 판정은 두 verdict가
+            # 모두 모였을 때만 일어나고, 그 전제 검사는 maybe_finish가 갖고 있다.
             await self.maybe_finish(requirement_id)
 
-    async def _transition(self, requirement_id: str, signal: WorkflowSignal) -> None:
+    async def _transition(
+        self,
+        requirement_id: str,
+        signal: WorkflowSignal,
+        expected: RequirementState | None = None,
+    ) -> bool:
+        """상태를 전이하고 같은 트랜잭션에 이벤트를 남긴다. 전이했으면 True.
+
+        `expected`를 주면 **잠금 안에서** 현재 상태를 확인하고, 다르면 아무 것도
+        하지 않고 False를 돌려준다. 호출자가 미리 읽어 두고 비교하는 방식으로는
+        읽기와 전이 사이가 창으로 남아 같은 경합이 재현된다 — 그래서 검사를 여기
+        잠금 안으로 들여왔다. `expected`가 없으면 종전대로 허용되지 않는 신호에
+        `IllegalTransition`을 던진다(호출자가 전제를 이미 보장하는 경로들이다).
+        """
         async with self._sm() as s:
             req = (
                 await s.execute(
@@ -377,6 +412,12 @@ class WorkflowEngine:
                     .with_for_update()
                 )
             ).scalar_one()
+            if expected is not None and RequirementState(req.state) is not expected:
+                logger.info(
+                    "전이를 건너뛴다: %s는 %s를 기대했으나 이미 %s다",
+                    requirement_id, expected.value, req.state,
+                )
+                return False
             req.state = next_state(RequirementState(req.state), signal).value
             record_event(
                 s,
@@ -386,6 +427,7 @@ class WorkflowEngine:
                 {"to": req.state, "signal": signal.value},
             )
             await s.commit()
+            return True
 
     async def maybe_finish(self, requirement_id: str) -> None:
         """qa/security 두 verdict가 모두 도착했을 때만 판정한다.
