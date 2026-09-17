@@ -35,6 +35,7 @@ import websockets
 
 from orchestrator.workflow import RequirementState
 from tests.integration.harness import (
+    REPO_ROOT,
     kill_orchestrator,
     purge,
     restart_orchestrator,
@@ -289,28 +290,39 @@ async def test_completion_criterion_5_no_llm_calls() -> None:
     코드가 LLM을 부르는가"이지 시험 코드의 어휘가 아니다. `web/`은
     `node_modules`를 반드시 빼야 한다(서드파티 라이브러리 소스에 우연히
     "anthropic"·"openai" 문자열이 섞여 들어와도 이 프로젝트의 의존이 아니다).
+
+    **경로는 `__file__`에서 유도한 리포 루트에 고정한다.** 상대 경로
+    (`Path("packages")`)는 cwd가 리포 루트일 때만 맞고, 그 밖에서는 `rglob`이
+    빈 결과를 내며 **아무것도 읽지 않고 통과**한다. 이 시험의 값어치는 "스캔했고
+    없었다"인데 상대 경로는 "스캔하지 않았다"와 구분되지 않는다 — SP1의 정체성
+    기준(LLM 0회)을 지키는 시험이 조용히 공회전하면 안 된다. 스캔 대상이
+    비어 있지 않다는 것까지 함께 단언한다.
     """
     forbidden = ("api.anthropic.com", "api.openai.com", "anthropic", "openai")
 
-    py_roots = ("packages", "services")
-    py_text = " ".join(
-        p.read_text(encoding="utf-8")
-        for root in py_roots
-        for p in pathlib.Path(root).rglob("*.py")
-    )
+    py_files = [
+        p
+        for root in ("packages", "services")
+        for p in (REPO_ROOT / root).rglob("*.py")
+    ]
+    assert len(py_files) > 10, f"Python 스캔 대상이 비었다 — 경로가 틀렸다: {py_files}"
+    py_text = " ".join(p.read_text(encoding="utf-8") for p in py_files)
     for token in forbidden:
         assert token not in py_text.lower(), f"Python 코드에서 LLM 의존 발견: {token}"
 
-    web_src = pathlib.Path("web/src")
-    web_text = " ".join(
-        p.read_text(encoding="utf-8")
+    web_files = [
+        p
         for pattern in ("*.ts", "*.tsx")
-        for p in web_src.rglob(pattern)
-    )
+        for p in (REPO_ROOT / "web" / "src").rglob(pattern)
+    ]
+    assert web_files, "web/src 스캔 대상이 비었다 — 경로가 틀렸다"
+    web_text = " ".join(p.read_text(encoding="utf-8") for p in web_files)
     for token in forbidden:
         assert token not in web_text.lower(), f"web/src에서 LLM 의존 발견: {token}"
 
     # package.json의 의존성 목록 자체에도 anthropic/openai SDK가 없어야 한다.
-    package_json = pathlib.Path("web/package.json").read_text(encoding="utf-8").lower()
+    package_json = (
+        (REPO_ROOT / "web" / "package.json").read_text(encoding="utf-8").lower()
+    )
     for token in ("anthropic", "openai"):
         assert token not in package_json, f"web/package.json에서 LLM 의존 발견: {token}"
