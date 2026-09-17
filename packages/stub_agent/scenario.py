@@ -16,6 +16,54 @@ from dataclasses import dataclass, field
 import yaml
 
 
+class ScenarioError(ValueError):
+    """시나리오 파일이 이 스텁이 모르는 것을 지시했다.
+
+    **조용히 무시하지 않는 것이 요점이다.** 시나리오는 실패 주입 테스트의
+    명세다 — `attempt_2: hang`처럼 오타 난 지시를 무시하면 그 테스트는
+    **실패를 주입하지 않은 채** 초록이 된다. 아무것도 시험하지 않으면서
+    통과하는 테스트가 깨진 테스트보다 나쁘다.
+    """
+
+
+#: `executor.build_payload`가 실제로 해석하는 주입 모드. 여기 없는 값은
+#: executor의 `== "crash"` 비교에 걸리지 않아 아무 일도 일으키지 못한다.
+KNOWN_FAILURE_MODES = frozenset({"crash"})
+
+#: `attempt_N` 외에 에이전트 스펙이 가질 수 있는 키.
+KNOWN_SPEC_KEYS = frozenset({"verdicts", "latency_ms"})
+
+_ATTEMPT_PREFIX = "attempt_"
+
+
+def _parse_failures(spec: dict, agent: str, path: str) -> dict[int, str]:
+    """`attempt_N` 키를 걷어 내고, 나머지가 전부 아는 키인지 확인한다."""
+    failures: dict[int, str] = {}
+    for key, value in spec.items():
+        if not key.startswith(_ATTEMPT_PREFIX):
+            if key not in KNOWN_SPEC_KEYS:
+                raise ScenarioError(
+                    f"{path}의 {agent}: 알 수 없는 키 {key!r} "
+                    f"(아는 키: {sorted(KNOWN_SPEC_KEYS)} 또는 "
+                    f"{_ATTEMPT_PREFIX}N). 'attempt2'처럼 밑줄을 빠뜨리지 "
+                    f"않았는지 확인할 것 — 그 오타는 주입을 통째로 삼킨다"
+                )
+            continue
+        suffix = key.removeprefix(_ATTEMPT_PREFIX)
+        if not suffix.isdigit():
+            raise ScenarioError(
+                f"{path}의 {agent}: {key!r}의 N이 숫자가 아니다"
+            )
+        if value not in KNOWN_FAILURE_MODES:
+            raise ScenarioError(
+                f"{path}의 {agent}: {key}에 알 수 없는 주입 모드 {value!r} "
+                f"(아는 모드: {sorted(KNOWN_FAILURE_MODES)}). 이 값은 스텁이 "
+                f"해석하지 못해 아무 실패도 주입되지 않는다"
+            )
+        failures[int(suffix)] = value
+    return failures
+
+
 @dataclass
 class AgentScenario:
     agent: str
@@ -30,10 +78,7 @@ class AgentScenario:
         with open(path, encoding="utf-8") as fh:
             doc = yaml.safe_load(fh)
         spec = doc.get("agents", {}).get(agent, {}) or {}
-        failures = {
-            int(k.removeprefix("attempt_")): v
-            for k, v in spec.items() if k.startswith("attempt_")
-        }
+        failures = _parse_failures(spec, agent, path)
         return cls(agent=agent, verdicts=list(spec.get("verdicts", [])),
                    failures=failures, latency_ms=int(spec.get("latency_ms", 0)))
 

@@ -29,8 +29,11 @@ DB도 컨테이너도 없이 시험할 수 있다(`tests/orchestrator/test_recon
   만든다.
 - **한 번에 한 걸음.** 관찰 → 동작 하나 → 다음 주기에 다시 관찰. 여러 걸음을
   한 번에 몰아 하면 중간 상태를 관찰하지 않은 채 추측으로 진행하게 된다.
-- **재시도 정책·실패 분류는 Task 12 소관이다.** 여기서는 "관측된 사실"만 기록하고
-  누락된 작업을 다시 디스패치한다. 횟수 제한도 분류도 두지 않는다.
+- **판단의 재료는 관측뿐이다.** "몇 번 실패했는가"·"얼마나 오래 열려 있는가"처럼
+  행에서 직접 읽히는 사실만 쓴다. 상태 전이 규칙 자체는 여기 없다 — 그건
+  `workflow.py`와 `engine._transition`에만 있다. (이 자리에는 한때 "횟수 제한도
+  분류도 두지 않는다"고 적혀 있었다. 바로 아래 캡이 생기면서 거짓이 됐고,
+  같은 docstring 안에서 다음 문단과 모순됐다.)
 
 Task 12 추가: **재시도 상한(캡)**. `dispatch_agent`의 `attempt`(= 그 회차의 행 수)에는
 스스로 상한이 없다 — 영원히 크래시하는 에이전트가 있으면 리컨실러가 영원히
@@ -221,7 +224,7 @@ class Reconciler:
         self,
         session_maker,
         engine: WorkflowEngine,
-        interval_s: float = 10.0,
+        interval_s: float = DEFAULT_INTERVAL_S,
         stale_after_s: float = DEFAULT_STALE_AFTER_S,
         stuck_after_s: float = DEFAULT_STUCK_AFTER_S,
     ) -> None:
