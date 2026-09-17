@@ -9,6 +9,13 @@ def idempotency_key(requirement_id: str, agent: str, revision: int,
 
     입력 Artifact 순서는 의미가 없으므로 정렬해 안정화한다.
     revision이 포함되므로 환류로 인한 정당한 재실행은 다른 키가 된다.
+
+    필드 경계는 길이 접두사로 인코딩되어 구분자 주입을 방지한다.
     """
-    material = "|".join([requirement_id, agent, str(revision), *sorted(input_hashes)])
+    def encode_field(field: str) -> str:
+        return f"{len(field)}:{field}"
+
+    material = "|".join(
+        encode_field(f) for f in [requirement_id, agent, str(revision), *sorted(input_hashes)]
+    )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
