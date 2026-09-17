@@ -43,17 +43,24 @@ class StubExecutor(AgentExecutor):
     - Payload(dict)를 아티팩트에 담으려면 `a2a.types.Part(data=...)`가 필요하고,
       `data` 필드는 protobuf `google.protobuf.Value`이므로
       `google.protobuf.json_format.ParseDict`로 변환한다.
-    - `attempt` 번호는 실제 A2A 요청 시그니처에 전용 필드가 없다. 이 태스크
-      범위에서는 오케스트레이터가 `context.metadata["attempt"]`로 전달한다고
-      가정한다(기본값 1). 이 가정은 Task 8/9에서 오케스트레이터가 실제로 에이전트를
-      호출하는 코드와 맞춰 재검증해야 한다.
+
+    `attempt`는 이 스텁 자신의 호출 순번이다(`AgentScenario.next_attempt()`가 관리) —
+    오케스트레이터의 재시도 카운터(`workflow_tasks.attempt`)와는 이름만 같은 별개의
+    숫자다. 두 카운터를 맞추려 하지 않는다: 오케스트레이터가 몇 번째 시도인지와
+    무관하게, 이 스텁은 자신이 몇 번째로 호출됐는지만 안다.
     """
 
     def __init__(self, scenario: AgentScenario, agent: str) -> None:
         self.scenario = scenario
         self.agent = agent
 
-    def build_payload(self, attempt: int) -> dict:
+    def build_payload(self, attempt: int | None = None) -> dict:
+        """`attempt`를 생략하면 시나리오의 내부 호출 카운터(운영 경로에서 쓰는
+        `AgentScenario.next_attempt()`)를 쓴다. 명시적으로 넘기면(단위 테스트
+        전용) 그 값이 카운터를 대신하며 카운터 자체는 건드리지 않는다.
+        """
+        if attempt is None:
+            attempt = self.scenario.next_attempt()
         if self.scenario.failure_for_attempt(attempt) == "crash":
             raise StubCrash(f"{self.agent} attempt {attempt} 크래시 주입")
         if self.scenario.latency_ms:
@@ -80,8 +87,8 @@ class StubExecutor(AgentExecutor):
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)
         await updater.start_work()
 
-        attempt = int(context.metadata.get("attempt", 1))
-        payload = self.build_payload(attempt=attempt)
+        # attempt를 넘기지 않는다 — 시나리오 자신의 호출 카운터가 운영 경로다.
+        payload = self.build_payload()
 
         await updater.add_artifact([_payload_to_part(payload)], name=payload["kind"])
         if payload["exit_code"] == 0:
