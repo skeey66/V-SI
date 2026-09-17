@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from orchestrator.a2a_client import AgentClient
+from orchestrator.a2a_client import TERMINAL_TASK_STATES, AgentClient
 from orchestrator.idempotency import idempotency_key
 from orchestrator.models import Artifact, WorkflowRequirement, WorkflowTask
 from orchestrator.outbox import record_event
@@ -155,6 +155,11 @@ class WorkflowEngine:
         a2a_task_id = update.get("taskId")
         state = (update.get("status") or {}).get("state")
         if not a2a_task_id or not state:
+            return
+        if state not in TERMINAL_TASK_STATES:
+            # 한 Task 당 푸시가 네 번 온다(Task 생성 / working / artifact / completed).
+            # 종료 전이가 아니면 여기서 끊는다 — 그러지 않으면 중간 상태마다 에이전트에
+            # 불필요한 get_task 왕복이 한 번씩 더 붙는다.
             return
 
         async with self._sm() as s:
