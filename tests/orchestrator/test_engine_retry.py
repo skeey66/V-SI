@@ -2,9 +2,15 @@
 
 여기서 시험하는 것은 **에이전트 실행 자체가 아니라 제출 왕복이 터지는 경우**다
 (연결 거부, 5xx, 스키마 오류 등) — Task 13이 다루는 "제출은 됐는데 executor가
-크래시해 푸시가 안 오는" 경로(리컨실러의 PROBE)와는 다른 층이다. 여기 실패는
-아직 에이전트 쪽에 Task가 생기지 않았으므로 같은 멱등성 키로 그 자리에서
-다시 시도해도 안전하다 — 새 `WorkflowTask` 행을 만들 필요가 없다.
+크래시해 푸시가 안 오는" 경로(리컨실러의 PROBE)와는 다른 층이다.
+
+리뷰 라운드 1: 제자리 재시도(같은 행·같은 멱등성 키)는 **요청이 상대에게 닿지
+않았다는 것이 예외로 증명될 때만** 안전하다(연결 거부·연결 타임아웃 —
+`retry.is_undelivered`). 5xx나 읽기 타임아웃처럼 상대가 이미 요청을 받았을
+수 있는 모호한 실패는 제자리 재시도하지 않는다 — 그 자리에서 또 보내면
+에이전트 쪽에 같은 작업이 두 번 생길 위험이 있다(첫 Task는 고아가 되고 완료
+푸시는 상관시킬 행이 없어 버려진다). 모호한 실패는 이 행을 즉시 실패로
+확정하고, 리컨실러가 새 행·새 멱등성 키로 다시 보낸다.
 
 가짜 `AgentClient`로 `submit()`이 몇 번째에 성공/포기하는지를 결정론적으로
 고정한다. `asyncio.sleep`은 실제로 기다리지 않도록 패치한다 — 정책의 존재를
@@ -122,10 +128,18 @@ async def test_poison_submit_failure_is_not_retried(session) -> None:
         await db.dispose()
 
 
-async def test_transport_submit_failure_retries_then_succeeds(session) -> None:
-    """5xx급 실패(TRANSPORT)는 최대 3회 시도 안에서 성공하면 살아난다."""
-    rid = "REQ-RETRY-TRANSPORT-OK"
-    client = FakeAgentClient([_500(), _500()], a2a_id="a2a-recovered")
+async def test_undelivered_submit_failure_retries_in_place_then_succeeds(session) -> None:
+    """연결 거부(전달이 안 됐다는 것이 증명됨)는 같은 행·같은 키로 제자리 재시도한다.
+
+    리뷰 라운드 1: 전에는 5xx로 이 경로를 시험했지만, 5xx는 상대가 요청을 이미
+    받고 나서 실패했을 수 있어(모호함) 제자리 재시도 대상이 아니다. 제자리
+    재시도는 "전달 안 됨이 증명된" 실패(연결 거부·연결 타임아웃)에만 쓴다.
+    """
+    rid = "REQ-RETRY-UNDELIVERED-OK"
+    client = FakeAgentClient(
+        [httpx.ConnectError("refused"), httpx.ConnectError("refused")],
+        a2a_id="a2a-recovered",
+    )
     db, maker, workflow = await _engine_with_client(rid, "planner", client, session)
     try:
         await workflow.dispatch_agent(rid, "planner")
@@ -138,14 +152,37 @@ async def test_transport_submit_failure_retries_then_succeeds(session) -> None:
         await db.dispose()
 
 
-async def test_transport_submit_failure_gives_up_after_max_attempts(session) -> None:
-    """3회 다 실패하면(TRANSPORT 상한) 그 행은 실패로 확정되고 더 시도하지 않는다."""
-    rid = "REQ-RETRY-TRANSPORT-FAIL"
-    client = FakeAgentClient([_500(), _500(), _500(), _500()])
+async def test_undelivered_submit_failure_gives_up_after_max_attempts(session) -> None:
+    """연결 거부가 3회(TRANSPORT 상한) 다 나면 그 행은 실패로 확정되고 더 시도하지 않는다."""
+    rid = "REQ-RETRY-UNDELIVERED-FAIL"
+    client = FakeAgentClient([httpx.ConnectError("refused")] * 4)
     db, maker, workflow = await _engine_with_client(rid, "planner", client, session)
     try:
         await workflow.dispatch_agent(rid, "planner")
         assert client.submit_calls == 3  # 4번째는 없다 — 상한을 지킨다
+        task = await _only_task(maker, rid)
+        assert task.state == TASK_FAILED
+        assert task.failure_class == FailureClass.TRANSPORT.value
+        assert task.a2a_task_id is None
+    finally:
+        await db.dispose()
+
+
+async def test_ambiguous_submit_failure_is_not_retried_in_place(session) -> None:
+    """리뷰 라운드 1 수정: 5xx처럼 전달 여부가 모호한 실패는 제자리 재시도하지 않는다.
+
+    상대가 이미 요청을 받았을 수 있으므로, 같은 키로 또 보내면 에이전트 쪽에
+    Task가 두 번 생길 위험이 있다(첫 Task는 고아가 되고 그 완료 푸시는 상관시킬
+    행이 없어 버려진다). 대신 이 행을 즉시 실패로 확정하고(`failure_class`는
+    여전히 TRANSPORT로 기록해 캡 계산에 쓰인다), 리컨실러가 **새 행·새
+    멱등성 키**로 다시 보내게 한다.
+    """
+    rid = "REQ-RETRY-AMBIGUOUS"
+    client = FakeAgentClient([_500(), _500(), _500()])  # 재시도됐다면 더 던졌을 것
+    db, maker, workflow = await _engine_with_client(rid, "planner", client, session)
+    try:
+        await workflow.dispatch_agent(rid, "planner")
+        assert client.submit_calls == 1  # 제자리 재시도 없음 — TRANSPORT 상한(3)과 무관
         task = await _only_task(maker, rid)
         assert task.state == TASK_FAILED
         assert task.failure_class == FailureClass.TRANSPORT.value

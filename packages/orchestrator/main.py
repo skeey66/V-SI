@@ -29,6 +29,7 @@ from orchestrator.push_receiver import create_push_router
 from orchestrator.reconciler import (
     DEFAULT_INTERVAL_S,
     DEFAULT_STALE_AFTER_S,
+    DEFAULT_STUCK_AFTER_S,
     Reconciler,
 )
 from orchestrator.workflow import RequirementState
@@ -63,6 +64,10 @@ reconciler = Reconciler(
     workflow,
     interval_s=float(os.environ.get("VSI_RECONCILE_INTERVAL_S", DEFAULT_INTERVAL_S)),
     stale_after_s=float(os.environ.get("VSI_RECONCILE_STALE_S", DEFAULT_STALE_AFTER_S)),
+    # 리뷰 라운드 1: PROBE로도 안 끝나는 행(SDK 결함) 안전망. 운영 기본값은
+    # stale_after_s보다 한 자릿수 이상 크게 잡아 정상적으로 느린 실행을
+    # 강제로 끊지 않는다.
+    stuck_after_s=float(os.environ.get("VSI_RECONCILE_STUCK_S", DEFAULT_STUCK_AFTER_S)),
 )
 
 app = FastAPI(title="v-si orchestrator")
