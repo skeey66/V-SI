@@ -23,5 +23,12 @@ card = build_card(
     skills=[ARTIFACT_KIND[AGENT]],
     base_url=BASE_URL,
 )
-task_store = DatabaseTaskStore(engine=make_engine(DB_URL), table_name="tasks")
+# `create_table=False`가 핵심이다. 기본값(True)은 첫 사용 시점에 지연 CREATE TABLE을
+# 하는데, 에이전트 4기가 한 DB를 공유하므로 qa·security 병렬 디스패치에서 네 프로세스가
+# 동시에 DDL을 때려 "relation already exists"가 날 수 있다. 테이블 생성은 오케스트레이터
+# startup이 단독으로 수행한다(`orchestrator/main.py`) — 에이전트가 이 테이블을 쓰는
+# 유일한 계기가 그 오케스트레이터의 디스패치이므로 순서는 보장된다.
+task_store = DatabaseTaskStore(
+    engine=make_engine(DB_URL), create_table=False, table_name="tasks"
+)
 app = create_agent_app(card, StubExecutor(scenario, AGENT), task_store)
