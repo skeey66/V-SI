@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+build/
+
+# 환경
+.env
+.env.*
+!.env.example
+
+# OS / 에디터
+.DS_Store
+.idea/
+.vscode/
