@@ -1,0 +1,90 @@
+<h2>SP1 컴포넌트 경계 — SDK가 주는 것 vs 우리가 쓰는 것</h2>
+<p class="subtitle">회색 = <code>a2a-sdk</code> 제공 · 컬러 = 우리 코드. 우리가 쓸 양이 생각보다 적습니다.</p>
+
+<div class="split">
+
+  <div class="mockup">
+    <div class="mockup-header">에이전트 프로세스 1개 (× 4)</div>
+    <div class="mockup-body" style="padding:14px;background:rgba(127,127,127,0.05)">
+
+      <div style="border:1.5px dashed #8a8a8a;border-radius:6px;padding:9px;margin-bottom:8px;opacity:.85">
+        <div style="font:10px ui-monospace,monospace;color:#8a8a8a">A2AFastAPIApplication</div>
+        <div style="font-size:11px;color:#8a8a8a;margin-top:3px">ASGI 앱 · HTTP+JSON 라우팅 · <code>/.well-known/</code> 카드 게시</div>
+      </div>
+
+      <div style="border:1.5px dashed #8a8a8a;border-radius:6px;padding:9px;margin-bottom:8px;opacity:.85">
+        <div style="font:10px ui-monospace,monospace;color:#8a8a8a">DefaultRequestHandler</div>
+        <div style="font-size:11px;color:#8a8a8a;margin-top:3px">Task 생성 · 상태 전이 · 이벤트 스트리밍 · <strong>push notification</strong></div>
+      </div>
+
+      <div style="border:1.5px dashed #8a8a8a;border-radius:6px;padding:9px;margin-bottom:8px;opacity:.85">
+        <div style="font:10px ui-monospace,monospace;color:#8a8a8a">TaskStore &nbsp;→&nbsp; PostgreSQL</div>
+        <div style="font-size:11px;color:#8a8a8a;margin-top:3px">Task 지속. 우리는 <em>설정만</em> 합니다</div>
+      </div>
+
+      <div style="text-align:center;font-size:15px;color:#8a8a8a;margin:2px 0 6px">↑ 여기까지 SDK</div>
+
+      <div style="border:2px solid #c9913f;border-radius:6px;padding:9px;margin-bottom:7px">
+        <div style="font:10px ui-monospace,monospace;color:#c9913f;font-weight:600">AgentExecutor &nbsp;·&nbsp; 우리 구현</div>
+        <div style="font-size:11px;margin-top:3px">유일한 확장 지점. SP1은 고정 Artifact 반환 스텁, SP2에서 LLM 호출로 교체</div>
+      </div>
+
+      <div style="border:2px solid #4a9d7f;border-radius:6px;padding:9px;margin-bottom:7px">
+        <div style="font:10px ui-monospace,monospace;color:#4a9d7f;font-weight:600">AgentCard 선언 &nbsp;·&nbsp; 우리 작성</div>
+        <div style="font-size:11px;margin-top:3px">skills · <code>authentication</code> · <code>capabilities.streaming</code> · I/O modes</div>
+      </div>
+
+      <div style="border:2px solid #7a8fc4;border-radius:6px;padding:9px">
+        <div style="font:10px ui-monospace,monospace;color:#7a8fc4;font-weight:600">agent-runtime &nbsp;·&nbsp; 얇은 공용 래퍼</div>
+        <div style="font-size:11px;margin-top:3px">부트스트랩 · OTel 설정 · 헬스체크 · 공통 에러 매핑. <strong>그게 전부입니다</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">오케스트레이터 (전부 우리 코드)</div>
+    <div class="mockup-body" style="padding:14px;background:rgba(127,127,127,0.05)">
+
+      <div style="border:2px solid #6b7fd7;border-radius:6px;padding:9px;margin-bottom:7px">
+        <div style="font:10px ui-monospace,monospace;color:#6b7fd7;font-weight:600">Workflow Engine</div>
+        <div style="font-size:11px;margin-top:3px">요구사항 ID → DEV/QA/SEC 하위작업 의존성 계산 · 결정적 코드</div>
+      </div>
+
+      <div style="border:2px solid #6b7fd7;border-radius:6px;padding:9px;margin-bottom:7px">
+        <div style="font:10px ui-monospace,monospace;color:#6b7fd7;font-weight:600">Policy Gate</div>
+        <div style="font-size:11px;margin-top:3px">최대 반복 횟수 · 최대 실행시간 · 사람 승인 필요 작업 차단</div>
+      </div>
+
+      <div style="border:2px solid #b9635c;border-radius:6px;padding:9px;margin-bottom:7px">
+        <div style="font:10px ui-monospace,monospace;color:#b9635c;font-weight:600">Push Receiver</div>
+        <div style="font-size:11px;margin-top:3px">에이전트 완료 콜백 수신. <strong>폴링 루프 없음</strong> — SDK 푸시 사용</div>
+      </div>
+
+      <div style="border:2px solid #4a9d7f;border-radius:6px;padding:9px;margin-bottom:7px">
+        <div style="font:10px ui-monospace,monospace;color:#4a9d7f;font-weight:600">Artifact Registry</div>
+        <div style="font-size:11px;margin-top:3px">requirements.json · source_code · test_report.json 버전·소유권</div>
+      </div>
+
+      <div style="border:2px solid #c9913f;border-radius:6px;padding:9px;margin-bottom:10px">
+        <div style="font:10px ui-monospace,monospace;color:#c9913f;font-weight:600">Outbox Writer &nbsp;·&nbsp; 문서 외 추가</div>
+        <div style="font-size:11px;margin-top:3px">워크플로 상태 전이와 <code>events</code> 행을 한 트랜잭션에</div>
+      </div>
+
+      <div style="border:1.5px dashed #8a8a8a;border-radius:6px;padding:9px;opacity:.85">
+        <div style="font:10px ui-monospace,monospace;color:#8a8a8a">Event Gateway (별도 프로세스)</div>
+        <div style="font-size:11px;color:#8a8a8a;margin-top:3px">outbox 테일 → WebSocket → React 그래프 UI</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="section" style="margin-top:22px">
+  <div class="label">경계가 깨끗한지 검증하는 질문</div>
+  <ul style="font-size:13.5px;line-height:1.75;margin-top:8px">
+    <li><strong>에이전트는 다른 에이전트를 아는가?</strong> → 모릅니다. AgentExecutor는 입력 Artifact만 받고 출력 Artifact만 냅니다. 스텁↔LLM 교체가 오케스트레이터에 무영향인 이유입니다.</li>
+    <li><strong>오케스트레이터는 Task 내부 상태를 아는가?</strong> → 모릅니다. SDK TaskStore 소관이고, 오케스트레이터는 푸시로 받는 완료/실패 통지만 봅니다.</li>
+    <li><strong>UI가 죽으면?</strong> → outbox에 계속 쌓이고, 게이트웨이가 올라오면 이어서 테일합니다. 워크플로는 영향 없음.</li>
+    <li><strong>Artifact 테이블은 누구 것인가?</strong> → 오케스트레이터. SDK의 Task 테이블과 <em>다른 스키마</em>라 한 트랜잭션에 묶을 수 있습니다.</li>
+  </ul>
+</div>
