@@ -1,0 +1,6 @@
+scenario: all_pass
+agents:
+  planner:  { verdicts: [] }
+  dev:      { verdicts: [] }
+  qa:       { verdicts: [PASS] }
+  security: { verdicts: [PASS] }
