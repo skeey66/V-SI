@@ -1,0 +1,6 @@
+scenario: qa_fails_twice
+agents:
+  planner:  { verdicts: [] }
+  dev:      { verdicts: [], attempt_2: crash, latency_ms: 200 }
+  qa:       { verdicts: [FAIL, FAIL, PASS] }
+  security: { verdicts: [FAIL, PASS, PASS] }
