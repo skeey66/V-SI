@@ -9,8 +9,8 @@
    새 행을 만든다(Task 11·12).
 4. `verdict`는 에이전트의 주장이 아니라 `exit_code`에서 도출한다.
 
-이 태스크(Task 10)는 해피 패스만 완주한다. 환류 루프·반복 상한은 Task 11,
-재시도는 Task 12, 리컨실리에이션은 Task 13 소관이라 여기엔 없다.
+Task 10이 해피 패스를, Task 11이 환류 루프와 반복 상한을 채웠다. 재시도는
+Task 12, 리컨실리에이션은 Task 13 소관이라 아직 여기엔 없다.
 """
 
 from __future__ import annotations
@@ -97,12 +97,28 @@ class WorkflowEngine:
             if req is None:
                 raise LookupError(f"알 수 없는 requirement_id: {requirement_id}")
             key = idempotency_key(requirement_id, agent, req.revision, [])
+            # 계보 연결: Task 행은 불변이므로 환류는 직전 회차 행을 고쳐 쓰지 않고
+            # 새 행을 만들어 `revision_of`로 가리킨다. 첫 회차(revision 1)에는
+            # 직전 회차가 없어 자연히 NULL이 된다.
+            prev = (
+                await s.execute(
+                    select(WorkflowTask)
+                    .where(
+                        WorkflowTask.requirement_id == requirement_id,
+                        WorkflowTask.agent == agent,
+                        WorkflowTask.revision == req.revision - 1,
+                    )
+                    .order_by(WorkflowTask.created_at.desc())
+                    .limit(1)
+                )
+            ).scalars().first()
             task = WorkflowTask(
                 requirement_id=requirement_id,
                 agent=agent,
                 revision=req.revision,
                 idempotency_key=key,
                 state=TASK_SUBMITTED,
+                revision_of=prev.task_id if prev is not None else None,
             )
             s.add(task)
             await s.flush()
@@ -274,6 +290,12 @@ class WorkflowEngine:
         두 콜백이 동시에 들어오면 둘 다 "verdict 2개"를 보고 각자 전이를 시도해
         두 번째가 `IllegalTransition`으로 터진다. 요구사항 행을 `FOR UPDATE`로
         잠가 판정을 직렬화하고, 이미 VERIFYING을 벗어났으면 되돌아간다.
+
+        **두 verdict가 모두 모였을 때만 판정한다는 전제를 Task 11도 지킨다.**
+        FAIL 하나만 보고 먼저 환류를 시작하면, 아직 디스패치되지 않았거나 실행
+        중인 다른 검증 에이전트가 있는 채로 revision이 올라가 `_advance`의 검증
+        루프가 회차를 넘나들며 Task를 중복 생성한다. 그래서 환류 분기는 verdict
+        수 검사 **뒤에만** 있다.
         """
         async with self._sm() as s:
             req = (
@@ -313,6 +335,48 @@ class WorkflowEngine:
                 {"to": req.state, "signal": signal.value},
             )
             await s.commit()
+            failed = signal is WorkflowSignal.VERDICTS_FAIL
+
+        # 환류는 판정 트랜잭션을 닫은 뒤에 시작한다. 이 시점에 상태는 이미
+        # REMEDIATING이라, 뒤늦게 락을 얻은 다른 verdict 콜백은 위의 VERIFYING
+        # 가드에 걸려 되돌아간다 — 환류가 두 번 시작되지 않는다.
+        if failed:
+            await self._remediate(requirement_id)
+
+    async def _remediate(self, requirement_id: str) -> None:
+        """반복 상한을 확인하고, 남아 있으면 revision을 올려 새 dev Task를 만든다.
+
+        상한은 워크플로 층(요구사항 행의 `max_revisions`)에 있다 — 에이전트가
+        영원히 FAIL을 내도 여기서 멈추므로 에이전트가 우회할 수 없다.
+
+        되돌리는 대신 앞으로 간다: 기존 Task 행은 그대로 두고 revision을 올려
+        dev부터 새 행을 만든다(`dispatch_agent`가 `revision_of`로 계보를 잇는다).
+        """
+        async with self._sm() as s:
+            req = (
+                await s.execute(
+                    select(WorkflowRequirement)
+                    .where(WorkflowRequirement.requirement_id == requirement_id)
+                    .with_for_update()
+                )
+            ).scalar_one()
+            exceeded = req.revision >= req.max_revisions
+            if not exceeded:
+                req.revision += 1
+                record_event(
+                    s,
+                    "requirement",
+                    requirement_id,
+                    "revision_started",
+                    {"revision": req.revision},
+                )
+            await s.commit()
+
+        if exceeded:
+            await self._transition(requirement_id, WorkflowSignal.LIMIT_EXCEEDED)
+            return
+        await self._transition(requirement_id, WorkflowSignal.DEV_DONE)
+        await self.dispatch_agent(requirement_id, "dev")
 
     # ------------------------------------------------------------------ 조회
 

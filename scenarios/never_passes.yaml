@@ -1,0 +1,6 @@
+scenario: never_passes
+agents:
+  planner:  { verdicts: [] }
+  dev:      { verdicts: [] }
+  qa:       { verdicts: [FAIL] }
+  security: { verdicts: [FAIL] }
