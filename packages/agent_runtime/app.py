@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import httpx
-
 from a2a.server.agent_execution import AgentExecutor
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes.agent_card_routes import create_agent_card_routes
@@ -14,6 +12,8 @@ from a2a.server.tasks import (
 )
 from a2a.types import AgentCard
 from fastapi import FastAPI
+
+from agent_runtime.telemetry import instrument_app, instrumented_client
 
 #: 푸시 콜백 HTTP 타임아웃(초). 오케스트레이터의 /push는 즉시 202를 돌려주므로
 #: 짧게 잡는다 — 여기서 오래 매달리면 에이전트의 이벤트 소비 루프가 밀린다.
@@ -40,10 +40,17 @@ def create_agent_app(card: AgentCard, executor: AgentExecutor, task_store: TaskS
     기동 시 경합 표면을 넓힌다. 푸시 설정은 send_message 요청과 같은 프로세스에서
     쓰이고 소비되므로 프로세스 밖으로 나갈 이유가 없고, 프로세스가 죽어 설정이
     사라지는 경우는 Task 13의 리컨실리에이션이 덮는다.
+
+    OTel 계측(Task 14): `instrument_app`은 아래에서 SDK 라우트를 전부 붙인
+    **뒤에** 호출한다 — 먼저 부르면 SDK가 부착하는 라우트가 계측 대상에서
+    빠진다. `push_client`도 계측된 클라이언트를 쓴다 — 이 클라이언트가 보내는
+    /push POST가 "에이전트 실행 → 오케스트레이터 알림"을 잇는 유일한 경로이고,
+    여기서 trace context가 끊기면 완료 통지 이후의 모든 단계(다음 에이전트
+    디스패치, 재작업 등)가 별도 trace로 갈라진다.
     """
     app = FastAPI(title=f"v-si agent: {card.name}")
 
-    push_client = httpx.AsyncClient(timeout=PUSH_TIMEOUT_S)
+    push_client = instrumented_client(timeout_s=PUSH_TIMEOUT_S)
     push_config_store = InMemoryPushNotificationConfigStore()
     push_sender = BasePushNotificationSender(
         httpx_client=push_client, config_store=push_config_store
@@ -69,5 +76,8 @@ def create_agent_app(card: AgentCard, executor: AgentExecutor, task_store: TaskS
     @app.on_event("shutdown")
     async def _close_push_client() -> None:
         await push_client.aclose()
+
+    # 라우트를 모두 붙인 뒤에 계측한다(위 docstring 참고) — 순서가 유일한 요구사항이다.
+    instrument_app(app)
 
     return app

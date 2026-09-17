@@ -4,8 +4,13 @@
 있어야 하고(`VSI_PUSH_URL`), Task 13의 SIGKILL 테스트가 이 컨테이너를 죽였다
 살린다.
 
-OTel 계측은 Task 14 소관이라 여기엔 없다 — `agent_runtime.telemetry`는 아직
-존재하지 않으므로 임포트하면 부팅이 깨진다.
+OTel 계측(Task 14): `setup_tracing`은 이 모듈에서 다른 무엇보다도 먼저
+불러야 한다 — 아래에서 만드는 공유 httpx 클라이언트(`http`, 모든 에이전트로
+나가는 submit/get_task 호출에 쓰인다)를 계측된 클라이언트로 만들고, 계측
+라이브러리가 계측 시점에 고정하는 전역 TracerProvider가 실제 익스포터를 갖고
+있어야 하기 때문이다. `instrument_app(app)`은 이 파일 맨 끝, 라우트를 모두
+붙인 뒤에 부른다 — 순서가 바뀌면 이 서비스에 붙은 라우트가 계측 대상에서
+빠진다.
 """
 
 from __future__ import annotations
@@ -14,12 +19,12 @@ import asyncio
 import logging
 import os
 
-import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from a2a.server.tasks import DatabaseTaskStore
 
+from agent_runtime.telemetry import instrument_app, instrumented_client, setup_tracing
 from orchestrator.a2a_client import AgentClient
 from orchestrator.db import make_engine, session_factory
 from orchestrator.engine import WorkflowEngine
@@ -44,10 +49,14 @@ PUSH_TOKEN = os.environ["VSI_PUSH_TOKEN"]
 PUSH_URL = os.environ["VSI_PUSH_URL"]
 DB_URL = os.environ["VSI_DATABASE_URL"]
 
+# 다른 무엇보다 먼저: 아래 `instrumented_client(...)`가 이 시점의 전역
+# TracerProvider를 고정한다(모듈 docstring 참고).
+setup_tracing("orchestrator", endpoint=os.environ.get("VSI_OTLP_ENDPOINT"))
+
 timeouts = TimeoutConfig.from_env(os.environ)
 engine_db = make_engine(DB_URL)
 maker = session_factory(engine_db)
-http = httpx.AsyncClient(timeout=timeouts.step_s)
+http = instrumented_client(timeout_s=timeouts.step_s)
 
 clients = {
     name: AgentClient(
@@ -127,6 +136,12 @@ async def get_requirement(requirement_id: str) -> dict[str, str]:
 @app.get("/healthz")
 async def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+# 라우트를 모두 붙인 뒤에 계측한다 — 위 /push, /requirements, /healthz가 전부
+# 등록된 지금이 그 시점이다. `@app.on_event` 훅은 라우트가 아니라 순서와
+# 무관하다.
+instrument_app(app)
 
 
 @app.on_event("startup")
