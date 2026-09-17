@@ -24,11 +24,12 @@ def build_card(name: str, description: str, skills: list[str], base_url: str) ->
     )
     for skill_id in skills:
         card.skills.append(AgentSkill(id=skill_id, name=skill_id, description=skill_id))
-    # 주의: APIKeySecurityScheme(oneof 필드명 `api_key_security_scheme`)을 쓰면
-    # protobuf 텍스트 직렬화에 필드명이 그대로 노출되어 "api_key" 문자열이
-    # str(card)에 나타난다. 시크릿 스캔 계약(no "api_key" substring)을 지키기
-    # 위해 HTTPAuthSecurityScheme으로 내부 헤더 인증 "방식"만 선언한다.
-    scheme = card.security_schemes[_SCHEME_NAME].http_auth_security_scheme
-    scheme.scheme = "X-VSI-Agent-Key"
-    scheme.description = "내부 에이전트 간 헤더 기반 인증 방식(값은 카드에 포함하지 않음)"
+    # APIKeySecurityScheme이 의미상 정확하다: 커스텀 헤더 이름(X-VSI-Agent-Key)과
+    # 위치(header)를 선언하는 것이 바로 이 스킴의 용도다. protobuf 텍스트 직렬화가
+    # oneof 필드명 `api_key_security_scheme`을 그대로 노출하지만, 이는 "인증 방식을
+    # 선언"하는 것이지 자격증명 값 누출이 아니다. 값(토큰 등)은 이 카드 어디에도
+    # 담기지 않으며 build_card는 애초에 그런 값을 받는 파라미터가 없다.
+    scheme = card.security_schemes[_SCHEME_NAME].api_key_security_scheme
+    scheme.name = "X-VSI-Agent-Key"
+    scheme.location = "header"
     return card
