@@ -28,16 +28,48 @@ async def test_all_pass_reaches_accepted_without_revision() -> None:
 
 
 async def test_events_recorded_for_every_transition() -> None:
-    result = await run_scenario(SCENARIO, "REQ-002", "로그인")
-    types = [e.event_type for e in result.events]
-    assert "state_changed" in types
-    assert all(e.published_at is None for e in result.events)
+    """오케스트레이터 쪽 아웃박스 계약만 고정한다: 상태 전이·Task 착수·Task
+    완료마다 이벤트 행 하나를 기록한다(어떤 종류로, 어떤 aggregate로, 어떤
+    순서로).
 
-    # planned → implementing → verifying → accepted: 상태 전이 4회가 모두 남는다.
-    transitions = [
-        e.payload["to"] for e in result.events if e.event_type == "state_changed"
+    리뷰 라운드 1 이전 버전은 `all(e.published_at is None for e in
+    result.events)`를 같이 확인했는데, 그건 오케스트레이터의 불변식이 아니라
+    게이트웨이의 불변식이었다 — 게이트웨이는 요구사항별 구독 필터 없이 전역
+    브로드캐스트하므로, 이 시험이 도는 순간 다른 WebSocket 클라이언트(그래프
+    UI 등)가 붙어 있으면 그 클라이언트에게 실제로 전달되고 정상적으로
+    `published_at`이 찍힌다 — 그게 게이트웨이의 설계대로 동작하는 것이다.
+    그 assert는 "아무도 안 보고 있다"는 우연에 기대 통과해 왔을 뿐이고, 실제로
+    그래프 UI를 켜 둔 채로 이 스위트를 돌리면 깨졌다(Task 17에서 확인).
+    "새로 쓴 행은 미발행 상태로 커밋된다"는 쓰기 쪽 계약은
+    `tests/orchestrator/test_outbox.py::test_state_change_and_event_commit_together`
+    가 이미 살아 있는 게이트웨이 없이(로컬 스키마, 클라이언트 없음) 고정하고
+    있다 — 라이브 실행 뒤에 다시 확인할 이유가 없다.
+    """
+    result = await run_scenario(SCENARIO, "REQ-002", "로그인")
+
+    # planned → implementing → verifying → accepted: 상태 전이 4회가, 정확히
+    # 이 요구사항을 가리키는(aggregate="requirement", aggregate_id=REQ-002)
+    # state_changed 이벤트로, event_id 오름차순 그대로 남는다.
+    state_changed = [e for e in result.events if e.event_type == "state_changed"]
+    assert len(state_changed) == 4
+    assert all(e.aggregate == "requirement" and e.aggregate_id == "REQ-002" for e in state_changed)
+    assert [e.payload["to"] for e in state_changed] == [
+        "planned", "implementing", "verifying", "accepted",
     ]
-    assert transitions == ["planned", "implementing", "verifying", "accepted"]
+
+    # task_submitted는 오케스트레이터가 순차적으로(await dispatch_agent(...))
+    # 디스패치하므로 event_id 순서가 planner→dev→qa→security로 결정적이다.
+    submitted = [e for e in result.events if e.event_type == "task_submitted"]
+    assert [e.payload["agent"] for e in submitted] == ["planner", "dev", "qa", "security"]
+
+    # task_completed도 넷 다 나오지만, qa·security는 서로 독립된 프로세스가
+    # 각자 푸시를 보내는 경쟁 관계라 둘 사이의 완료 순서까지 결정적이지는
+    # 않다 — planner→dev 구간만 인과적으로 순서가 보장된다(dev는 planner의
+    # 완료 신호를 받아야 디스패치되므로).
+    completed = [e for e in result.events if e.event_type == "task_completed"]
+    completed_agents = [e.payload["agent"] for e in completed]
+    assert completed_agents[:2] == ["planner", "dev"]
+    assert set(completed_agents[2:]) == {"qa", "security"}
 
 
 async def test_tasks_carry_verdicts_and_distinct_idempotency_keys() -> None:
