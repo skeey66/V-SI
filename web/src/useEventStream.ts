@@ -36,6 +36,13 @@ export type StreamState = {
   requirementState: string | null;
   reworkPulse: ReworkPulse | null;
   escalationReason: string | null;
+  /**
+   * give_up 경로(재시도 예산 소진)에서만 채워진다 — remediate의
+   * max_revisions_exceeded 경로는 reason만 있고 agent/failure_class가 없다.
+   * 두 에스컬레이션 원인을 화면에서 구분하는 유일한 단서라 별도로 보존한다.
+   */
+  escalationAgent: string | null;
+  escalationFailureClass: string | null;
   /** revision_started가 참조할, 가장 최근에 FAIL을 낸 검증 에이전트. */
   lastFailedVerifier?: string;
 };
@@ -52,6 +59,8 @@ export function initialStreamState(): StreamState {
     requirementState: null,
     reworkPulse: null,
     escalationReason: null,
+    escalationAgent: null,
+    escalationFailureClass: null,
     lastFailedVerifier: undefined,
   };
 }
@@ -72,6 +81,8 @@ export function reduceEvents(state: StreamState, e: VsiEvent): StreamState {
   let requirementState = state.requirementState;
   let reworkPulse = state.reworkPulse;
   let escalationReason = state.escalationReason;
+  let escalationAgent = state.escalationAgent;
+  let escalationFailureClass = state.escalationFailureClass;
   let lastFailedVerifier = state.lastFailedVerifier;
 
   const agent = typeof e.payload.agent === "string" ? e.payload.agent : undefined;
@@ -117,7 +128,13 @@ export function reduceEvents(state: StreamState, e: VsiEvent): StreamState {
       const to = e.payload.to as string | undefined;
       if (to) requirementState = to;
       if (to === "escalated") {
+        // remediate(회차 상한 초과)는 reason만 싣는다. give_up(재시도 예산
+        // 소진)은 같은 트랜잭션·같은 이벤트에 agent/failure_class까지 실어
+        // 보낸다(Task 12) — 이게 있으면 give_up 경로, 없으면 remediate
+        // 경로라는 뜻이므로 둘 다 읽어 화면에서 원인을 구분한다.
         escalationReason = (e.payload.reason as string | undefined) ?? null;
+        escalationAgent = (e.payload.agent as string | undefined) ?? null;
+        escalationFailureClass = (e.payload.failure_class as string | undefined) ?? null;
       }
       break;
     }
@@ -137,6 +154,8 @@ export function reduceEvents(state: StreamState, e: VsiEvent): StreamState {
     requirementState,
     reworkPulse,
     escalationReason,
+    escalationAgent,
+    escalationFailureClass,
     lastFailedVerifier,
   };
 }

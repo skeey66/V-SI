@@ -52,8 +52,18 @@ function labelForEvent(e: VsiEvent): { type: string; agent: string; detail: stri
 
 export function AgentGraph() {
   const stream = useEventStream(GATEWAY_WS_URL);
-  const { events, activeAgents, lastResult, revision, requirementState, reworkPulse, escalationReason, status } =
-    stream;
+  const {
+    events,
+    activeAgents,
+    lastResult,
+    revision,
+    requirementState,
+    reworkPulse,
+    escalationReason,
+    escalationAgent,
+    escalationFailureClass,
+    status,
+  } = stream;
 
   // 환류 화살표는 순간의 사건이다 — revision_started가 찍힐 때만 잠깐 그린다.
   // (그 자체가 계속 반복되는 정보라 상시 표시하면 오히려 노이즈가 된다.)
@@ -188,6 +198,11 @@ export function AgentGraph() {
           {escalationReason && (
             <p className="vsi-empty-sub" style={{ marginTop: 10 }}>
               escalated: {escalationReason}
+              {/* give_up(재시도 예산 소진)은 agent/failure_class를 함께 싣는다 —
+                  remediate(회차 상한 초과)는 reason뿐이다. 있을 때만 붙여
+                  두 원인을 구분한다(Task 12). */}
+              {escalationAgent && <> · agent: {escalationAgent}</>}
+              {escalationFailureClass && <> · failure_class: {escalationFailureClass}</>}
             </p>
           )}
         </div>
