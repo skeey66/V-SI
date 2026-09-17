@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from orchestrator.db import make_engine
 from orchestrator.models import Base, OutboxEvent
-from services.event_gateway.pump import pump_once
+from services.event_gateway.pump import pump_once, recover_if_stale
 
 TEST_DB_URL = os.environ.get(
     "VSI_TEST_DATABASE_URL", "postgresql+asyncpg://vsi:vsi@localhost:55432/vsi"
@@ -131,3 +131,72 @@ async def test_no_clients_skips_cycle_without_touching_db(maker) -> None:
     async with maker() as s:
         rows = (await s.execute(select(OutboxEvent))).scalars().all()
     assert rows[0].published_at is None
+
+
+# --------------------------------------------------------- 커서 유효성 (Task 17)
+#
+# 실측(Task 17 작업 중): 이 컴포즈 스택을 여러 시간 띄워 둔 채로 단위 테스트
+# 스위트(`tests/orchestrator` 등, `events` 테이블을 매 테스트마다
+# drop_all/create_all한다)를 반복 실행했더니, 살아 있던 게이트웨이 컨테이너의
+# 메모리 속 `last_id`가 168로 남았는데 리셋된 테이블의 `max(event_id)`는
+# 102였다 — 그 뒤로 새로 쓰인 이벤트가 전부 `event_id > 168` 조건에 걸려
+# 조용히 삼켜졌다(에러도 로그도 없이). 아래 시험은 그 붕괴를 재현하고,
+# `recover_if_stale`/`pump_once`가 프로세스 재시작 없이 스스로 되감는지 본다.
+
+
+async def test_recover_if_stale_noop_when_cursor_within_table_range(maker) -> None:
+    """정상 상태(커서가 테이블 범위 안)에서는 아무것도 되감지 않는다."""
+    async with maker() as s:
+        s.add(
+            OutboxEvent(
+                aggregate="task", aggregate_id="t-normal",
+                event_type="task_submitted", payload={"agent": "dev"},
+            )
+        )
+        await s.commit()
+        row = (await s.execute(select(OutboxEvent))).scalars().first()
+
+    result = await recover_if_stale(maker, row.event_id)
+
+    assert result == row.event_id
+
+
+async def test_recover_if_stale_rewinds_when_cursor_is_ahead_of_reset_table(maker) -> None:
+    """DB가 리셋돼 테이블이 비었는데 커서만 앞서 있으면 0으로 되감는다."""
+    result = await recover_if_stale(maker, 999)
+
+    assert result == 0
+
+
+async def test_pump_once_does_not_swallow_events_after_table_reset(maker) -> None:
+    """리셋 이후에도 새 이벤트가 도착 즉시 전달돼야 한다(무증상 유실 재현·회귀 방지).
+
+    `maker` 픽스처가 이미 매 테스트 시작 시 drop_all/create_all을 해 두므로,
+    새로 생성되는 `OutboxEvent`는 event_id가 다시 1부터 시작한다 — 프로세스가
+    죽지 않은 채로 168 같은 앞선 커서를 물려받은 상황을 그대로 흉내낸다.
+    """
+    stale_last_id = 999  # 리셋 전 살아 있던 프로세스가 봤을 법한 앞선 커서.
+
+    async with maker() as s:
+        s.add(
+            OutboxEvent(
+                aggregate="task",
+                aggregate_id="t-after-reset",
+                event_type="task_submitted",
+                payload={"agent": "planner"},
+            )
+        )
+        await s.commit()
+
+    client = FakeWebSocket(fail=False)
+    clients = {client}
+
+    last_id = await pump_once(maker, clients, stale_last_id)
+
+    assert len(client.received) == 1, "리셋 후 새 이벤트가 삼켜졌다 — 커서 복구가 안 됐다"
+    assert client.received[0]["aggregate_id"] == "t-after-reset"
+    async with maker() as s:
+        rows = (await s.execute(select(OutboxEvent))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].published_at is not None
+    assert last_id == rows[0].event_id  # 커서가 999가 아니라 실제 테이블 기준으로 전진했다

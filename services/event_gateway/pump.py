@@ -21,16 +21,33 @@ not allowed"로 조용히 무시당하는 문제가 있었다(리뷰 라운드 1
 모든 이벤트가 `event_id`를 갖고 있어 클라이언트가 멱등하게 걸러낼 수 있으니,
 UI 그래프 입장에서 중복은 무해하고 유실은 무해하지 않다 — 그래서 이 방향을
 택한다.
+
+커서 유효성(Task 17에서 추가): `last_id`는 프로세스 메모리에만 산다.
+`resume_position`은 **프로세스 시작 시점**에만 DB를 신뢰하고, 그 뒤로는
+런타임 불변식을 전혀 검사하지 않았다 — 그런데 이 프로세스가 살아 있는 동안
+DB가 리셋되면(CI가 매 테스트마다 스키마를 drop_all/create_all하는 경우가
+전형적이다. 실측: 이 스택을 오래 띄워 둔 채로 단위 테스트 스위트를 돌렸더니
+살아 있던 게이트웨이의 `last_id`가 168로 남아 있는데 리셋된 테이블의
+`max(event_id)`는 102였다) `event_id > last_id` 조건이 새로 쌓이는 모든
+행보다 커서가 앞서 있는 상태가 되어 **그 뒤로 아무 이벤트도 영원히 전달되지
+않는다** — 에러도 로그도 없이 조용히 유실된다. `pump_once`가 매 사이클
+테이블의 실제 `max(event_id)`를 커서와 비교해, 커서가 테이블보다 앞서 있으면
+(있을 수 없는 상태 — 커서는 언제나 테이블에서 파생되었어야 한다) 그 자체를
+"DB가 프로세스 모르게 리셋/롤백됐다"는 신호로 보고 `resume_position`을 다시
+불러 커서를 되감는다.
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Protocol
 
 from sqlalchemy import func, select, update
 
 from orchestrator.models import OutboxEvent
+
+logger = logging.getLogger("event_gateway.pump")
 
 
 class SendsJson(Protocol):
@@ -84,6 +101,38 @@ async def tail_outbox(session_maker, last_id: int, limit: int = 100) -> list[dic
         ]
 
 
+async def current_max_id(session_maker) -> int:
+    """지금 테이블에 실제로 있는 가장 큰 `event_id`. 없으면 0.
+
+    `resume_position`(발행된 것 중 최댓값)과 달리 발행 여부를 가리지 않는다 —
+    "커서가 테이블보다 앞서 있는가"를 판정하려면 테이블에 물리적으로 존재하는
+    상한이 필요하다.
+    """
+    async with session_maker() as s:
+        max_id = (await s.execute(select(func.max(OutboxEvent.event_id)))).scalar()
+        return max_id or 0
+
+
+async def recover_if_stale(session_maker, last_id: int) -> int:
+    """커서가 테이블보다 앞서 있으면(불변식 위반) 재개 지점을 다시 계산한다.
+
+    정상 운영에서는 `last_id`가 테이블에 실제로 있었던 행에서만 나오므로
+    `last_id <= current_max_id`가 항상 성립해야 한다. 이 부등식이 깨졌다는 것은
+    프로세스는 안 죽었는데 그 밑의 테이블만 리셋/롤백됐다는 뜻이고, 그대로
+    두면 `event_id > last_id` 조건에 새 행이 영원히 걸리지 않는다(무증상 유실).
+    """
+    table_max = await current_max_id(session_maker)
+    if last_id > table_max:
+        recovered = await resume_position(session_maker)
+        logger.warning(
+            "커서가 테이블보다 앞서 있다(last_id=%d > table_max=%d) — "
+            "DB가 리셋된 것으로 보고 재개 지점을 %d로 되감는다",
+            last_id, table_max, recovered,
+        )
+        return recovered
+    return last_id
+
+
 async def mark_published(session_maker, event_ids: list[int]) -> None:
     """전달에 실제로 성공한 행만 발행 표시한다."""
     if not event_ids:
@@ -126,6 +175,7 @@ async def pump_once(session_maker, clients: set[SendsJson], last_id: int) -> int
     """
     if not clients:
         return last_id
+    last_id = await recover_if_stale(session_maker, last_id)
     events = await tail_outbox(session_maker, last_id)
     delivered_ids: list[int] = []
     for event in events:
