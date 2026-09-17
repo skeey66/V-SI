@@ -27,7 +27,7 @@ from a2a.server.tasks import DatabaseTaskStore
 from agent_runtime.telemetry import instrument_app, instrumented_client, setup_tracing
 from orchestrator.a2a_client import AgentClient
 from orchestrator.db import make_engine, session_factory
-from orchestrator.engine import WorkflowEngine
+from orchestrator.engine import DuplicateRequirement, WorkflowEngine
 from orchestrator.models import Base
 from orchestrator.policy import TimeoutConfig
 from orchestrator.push_receiver import create_push_router
@@ -56,7 +56,14 @@ setup_tracing("orchestrator", endpoint=os.environ.get("VSI_OTLP_ENDPOINT"))
 timeouts = TimeoutConfig.from_env(os.environ)
 engine_db = make_engine(DB_URL)
 maker = session_factory(engine_db)
-http = instrumented_client(timeout_s=timeouts.step_s)
+# 공유 httpx 클라이언트의 타임아웃은 **요청 하나**의 상한이다 — 워크플로 단계
+# 예산(`step_s`, 15분)을 여기 쓰면 층이 어긋난다. 한 단계는 제출 + 여러 번의
+# 폴링 왕복으로 이루어지므로, 그 단계 전체 예산을 개별 왕복의 상한으로 쓰면
+# 왕복 하나가 단계 전체를 먹어 치울 수 있다. 실제로 그랬다: 멈춘 에이전트
+# 하나가 리컨실리에이션 루프(직렬이다)를 최대 15분 붙잡았다.
+# 여기는 AgentExecutor 층(`executor_s`)의 backstop이고, 각 호출부는 그보다
+# 훨씬 짧은 `tool_s`로 스스로를 감싼다(`engine.dispatch_agent`/`refresh_task`).
+http = instrumented_client(timeout_s=timeouts.executor_s)
 
 clients = {
     name: AgentClient(
@@ -120,7 +127,14 @@ class StartRequirement(BaseModel):
 
 @app.post("/requirements", status_code=202)
 async def start_requirement(body: StartRequirement) -> dict[str, str]:
-    await workflow.start(body.requirement_id, body.title, body.run_id)
+    try:
+        await workflow.start(body.requirement_id, body.title, body.run_id)
+    except DuplicateRequirement:
+        # 데모의 정문이다. 같은 명령을 두 번 치는 것은 흔한 일이고, 그건
+        # 호출자의 상태 충돌(409)이지 서버 고장(500)이 아니다.
+        raise HTTPException(
+            status_code=409, detail="requirement already exists"
+        ) from None
     return {"requirement_id": body.requirement_id, "accepted": "true"}
 
 
