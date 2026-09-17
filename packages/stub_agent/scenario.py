@@ -1,10 +1,19 @@
+"""시나리오 파일 — 스텁 에이전트의 결정적 대본.
+
+`verdicts`(회차별 판정 순서), `latency_ms`(지연), `attempt_N`(N번째 호출에
+주입할 실패)만 있다. LLM이 없으므로 이 파일이 에이전트 행동의 전부다.
+
+**멱등성 키를 여기서 검사하지 않는다.** 예전에는 같은 키로 두 번 불리면
+터지는 `record_call`이 있었지만, 그 검출기는 아무도 부르지 않는 죽은 코드였다
+(스펙 §8이 그때까지 "에이전트가 키로 중복을 제거한다"고 적고 있었을 뿐이다).
+그 자리 재시도가 **증명된 미전달**로 좁혀진 뒤로는 같은 키가 에이전트에 두 번
+도달하는 경로 자체가 없어, 검출기가 불필요해졌다 — 미구현이 아니라 무의미해진
+것이다. 그 전제가 깨지는 조건은 스펙 §8과 §12.1에 경고로 남아 있다.
+"""
+
 from __future__ import annotations
 from dataclasses import dataclass, field
 import yaml
-
-
-class DuplicateCallError(RuntimeError):
-    """같은 멱등성 키로 두 번 호출됐다. 오케스트레이터의 멱등성 위반."""
 
 
 @dataclass
@@ -14,7 +23,6 @@ class AgentScenario:
     failures: dict[int, str] = field(default_factory=dict)
     latency_ms: int = 0
     _cursor: int = 0
-    _seen_keys: dict[str, int] = field(default_factory=dict)
     _invocation: int = 0
 
     @classmethod
@@ -48,9 +56,3 @@ class AgentScenario:
         """
         self._invocation += 1
         return self._invocation
-
-    def record_call(self, idempotency_key: str) -> int:
-        if idempotency_key in self._seen_keys:
-            raise DuplicateCallError(f"중복 호출: {idempotency_key}")
-        self._seen_keys[idempotency_key] = 1
-        return 1
