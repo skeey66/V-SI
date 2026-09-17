@@ -7,10 +7,11 @@ orchestrator)이 떠 있어야 한다. 하네스가 에이전트만 시나리오
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from orchestrator.workflow import RequirementState
-from tests.integration.harness import run_scenario
+from tests.integration.harness import ORCHESTRATOR_URL, run_scenario
 
 SCENARIO = "scenarios/all_pass.yaml"
 
@@ -94,3 +95,25 @@ async def test_tasks_carry_verdicts_and_distinct_idempotency_keys() -> None:
 
     kinds = {a.kind for a in result.artifacts}
     assert kinds == {"requirements", "source_code", "test_report", "security_report"}
+
+
+async def test_reposting_the_same_requirement_is_409_not_500() -> None:
+    """데모의 정문이 같은 명령을 두 번 받으면 409를 돌려준다.
+
+    `scripts/demo.sh`를 두 번 치는 것은 흔한 일이다. 유니크 제약 위반이
+    `IntegrityError` 그대로 새어 나가 500이 되면, 운영자는 "요구사항을 두 번
+    넣었다"를 "오케스트레이터가 고장났다"로 읽는다.
+    """
+    result = await run_scenario(SCENARIO, "REQ-004", "약관 동의")
+    assert result.state is RequirementState.ACCEPTED
+
+    async with httpx.AsyncClient(timeout=30) as c:
+        again = await c.post(
+            f"{ORCHESTRATOR_URL}/requirements",
+            json={
+                "requirement_id": "REQ-004",
+                "title": "약관 동의",
+                "run_id": "run-REQ-004-again",
+            },
+        )
+    assert again.status_code == 409, again.text

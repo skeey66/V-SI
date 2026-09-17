@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 import pytest
@@ -19,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from orchestrator.db import make_engine
-from orchestrator.engine import WorkflowEngine
+from orchestrator.engine import DuplicateRequirement, WorkflowEngine
 from orchestrator.models import OutboxEvent, WorkflowRequirement, WorkflowTask
 from orchestrator.policy import TimeoutConfig
 from orchestrator.retry import FailureClass
@@ -152,6 +153,109 @@ async def test_give_up_does_nothing_when_state_already_moved_on(session) -> None
     try:
         await workflow.give_up(rid, "dev", FailureClass.EXECUTION)  # 터지지 않는다
         await _assert_untouched(maker, rid, RequirementState.ACCEPTED)
+    finally:
+        await db.dispose()
+
+
+async def test_starting_an_existing_requirement_raises_duplicate(session) -> None:
+    """같은 `requirement_id`를 두 번 열면 전용 예외가 나온다.
+
+    예전에는 유니크 제약 위반이 `IntegrityError` 그대로 `POST /requirements`를
+    빠져나가 500이 됐다 — 데모의 정문에서 "요구사항을 두 번 넣었다"가
+    "오케스트레이터가 고장났다"로 보였다.
+    """
+    rid = "REQ-G-dup"
+    db, maker, workflow = await _engine_over(rid, RequirementState.PLANNED, session)
+    try:
+        with pytest.raises(DuplicateRequirement, match=rid):
+            await workflow.start(rid, "회원가입", "run-dup")
+        # 두 번째 시도가 아무 흔적도 남기지 않았다(이벤트도 Task도 없다).
+        await _assert_untouched(maker, rid, RequirementState.PLANNED)
+    finally:
+        await db.dispose()
+
+
+class _GatedEngine(WorkflowEngine):
+    """`remediate`의 두 번째 트랜잭션(`_transition`) 직전에 한 번 멈출 수 있는 엔진.
+
+    `remediate`는 트랜잭션이 둘이고(회차 증가 / 상태 전이) **첫 트랜잭션은
+    상태를 바꾸지 않는다** — 그래서 뒤늦게 락을 얻은 두 번째 호출자도 여전히
+    REMEDIATING을 보고 첫 가드를 통과한다. 그 창을 결정적으로 재현하려고
+    `_transition` 진입 직전에 게이트를 건다(전이 로직 자체는 건드리지 않고
+    `super()`로 그대로 넘긴다).
+
+    `dispatch_agent`는 기록만 한다 — 에이전트 클라이언트 없이 "몇 번
+    디스패치됐는가"만 보면 되기 때문이다.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.dispatched: list[str] = []
+        self.paused = asyncio.Event()
+        self.resume = asyncio.Event()
+        self.pause_next_transition = False
+
+    async def dispatch_agent(self, requirement_id: str, agent: str) -> None:
+        self.dispatched.append(agent)
+
+    async def _transition(self, *args, **kwargs) -> bool:
+        if self.pause_next_transition:
+            self.pause_next_transition = False
+            self.paused.set()
+            await self.resume.wait()
+        return await super()._transition(*args, **kwargs)
+
+
+async def test_remediate_does_not_dispatch_when_it_loses_the_transition(session) -> None:
+    """경쟁에서 진 `remediate`는 dev를 **디스패치하지 않는다**.
+
+    원장의 옛 논거("진 호출자는 `IllegalTransition`으로 죽는다")는 거짓이다 —
+    `(IMPLEMENTING, DEV_DONE) → VERIFYING`은 전이 표에 있는 **합법** 전이라
+    진 호출자는 죽지 않고 한 칸 더 간다. 그러면 revision R+1에 dev 행 2개,
+    검증자 행 0개, 상태 `verifying`이 남는다: 아무도 그 두 번째 dev를
+    기다리지 않고 verdict도 영영 모이지 않는다.
+
+    그래서 `expected=REMEDIATING`이 필요하다 — 전이가 내 것이 아니었으면
+    디스패치도 내 것이 아니다.
+    """
+    rid = "REQ-G-remediate-race"
+    session.add(
+        WorkflowRequirement(
+            requirement_id=rid, title="회원가입",
+            state=RequirementState.REMEDIATING.value, revision=1, run_id=f"run-{rid}",
+        )
+    )
+    session.add(
+        WorkflowTask(
+            requirement_id=rid, agent="dev", revision=1,
+            idempotency_key="k-remediate-race", state="completed", attempt=1,
+        )
+    )
+    await session.commit()
+
+    db = make_engine(TEST_DB_URL)
+    maker = async_sessionmaker(db, expire_on_commit=False)
+    workflow = _GatedEngine(maker, {}, TimeoutConfig.from_env({}))
+    try:
+        # 호출자 A: 회차를 1 → 2로 올린 직후 전이 직전에 멈춘다.
+        workflow.pause_next_transition = True
+        loser = asyncio.create_task(workflow.remediate(rid))
+        await asyncio.wait_for(workflow.paused.wait(), timeout=10)
+
+        # 호출자 B: 같은 창에서 전부 통과한다. 상태는 아직 REMEDIATING이고
+        # revision 2에는 Task가 없으므로 회차를 또 올리지도 않는다.
+        await workflow.remediate(rid)
+
+        workflow.resume.set()
+        await asyncio.wait_for(loser, timeout=10)
+
+        assert workflow.dispatched == ["dev"], (
+            f"dev 디스패치는 정확히 한 번이어야 한다: {workflow.dispatched}"
+        )
+        async with maker() as s:
+            req = await s.get(WorkflowRequirement, rid)
+            assert RequirementState(req.state) is RequirementState.IMPLEMENTING
+            assert req.revision == 2
     finally:
         await db.dispose()
 

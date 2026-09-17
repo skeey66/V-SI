@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 
 from opentelemetry import trace
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from orchestrator.a2a_client import TERMINAL_TASK_STATES, AgentClient
 from orchestrator.idempotency import idempotency_key
@@ -82,6 +83,19 @@ def _content_hash(payload: dict) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+class DuplicateRequirement(Exception):
+    """이미 있는 `requirement_id`로 다시 시작하려 했다.
+
+    호출자의 실수이지 시스템 장애가 아니다 — 데모의 정문(`POST /requirements`)이
+    이걸 `IntegrityError`로 새어 보내면 500이 나가고, 운영자는 "요구사항을 두 번
+    넣었다"를 "오케스트레이터가 고장났다"로 읽게 된다.
+    """
+
+    def __init__(self, requirement_id: str) -> None:
+        super().__init__(f"이미 존재하는 requirement_id: {requirement_id}")
+        self.requirement_id = requirement_id
+
+
 class WorkflowEngine:
     def __init__(
         self,
@@ -101,7 +115,16 @@ class WorkflowEngine:
     # ---------------------------------------------------------------- 진입점
 
     async def start(self, requirement_id: str, title: str, run_id: str) -> None:
+        """요구사항 하나를 연다. 같은 id를 두 번 열 수는 없다.
+
+        미리 읽어 보는 검사와 `IntegrityError` 잡기를 **둘 다** 둔다: 앞의 것은
+        흔한 경우(데모에서 같은 명령을 두 번 친다)에 명확한 오류를 주고, 뒤의
+        것은 두 요청이 같은 순간에 들어오는 경우를 덮는다. 유니크 제약이
+        최종 권위이고, 미리 읽기는 그 권위를 대신하지 않는다.
+        """
         async with self._sm() as s:
+            if await s.get(WorkflowRequirement, requirement_id) is not None:
+                raise DuplicateRequirement(requirement_id)
             s.add(
                 WorkflowRequirement(
                     requirement_id=requirement_id,
@@ -118,7 +141,10 @@ class WorkflowEngine:
                 "state_changed",
                 {"to": RequirementState.PLANNED.value, "signal": None},
             )
-            await s.commit()
+            try:
+                await s.commit()
+            except IntegrityError as exc:
+                raise DuplicateRequirement(requirement_id) from exc
         await self.dispatch_agent(requirement_id, "planner")
 
     async def dispatch_agent(self, requirement_id: str, agent: str) -> None:
@@ -329,14 +355,53 @@ class WorkflowEngine:
         부른다) 상태 이름만으로는 둘을 구분할 수 없다. 구분하는 것은 산출물의
         유무다: 정상 실행은 exit_code가 0이든 아니든 아티팩트를 남기고, 크래시한
         실행은 아무것도 남기지 못한다.
+
+        **왕복에 상한을 둔다**(`tool_s`). `reconcile_once`는 요구사항을 직렬로
+        훑으므로, 여기서 응답 없는 에이전트를 무기한 기다리면 그 한 건이 나머지
+        **모든** 요구사항의 수렴을 함께 멈춰 세운다. 공유 httpx 클라이언트의
+        타임아웃은 단계(step) 층의 backstop이지 이 왕복의 예산이 아니다 —
+        `submit()`이 이미 같은 `tool_s`로 감싸여 있고, `get_task`는 같은 층의
+        같은 왕복이다.
+
+        타임아웃은 **모호한 실패**다: 에이전트가 살아 있는데 느린 것인지, 죽어서
+        영영 응답이 없는 것인지 구분할 수 없다. 그래서 `submit()`의 모호한 실패와
+        같은 취급을 한다 — 이 행을 여기서 끝내고, 리컨실러가 새 행·새 멱등성
+        키로 다시 보낸다. 분류도 같은 `classify()`가 내린다(내장 `TimeoutError`
+        → TRANSPORT).
         """
-        snapshot = await self._clients[agent].get_task(a2a_task_id)
+        try:
+            snapshot = await asyncio.wait_for(
+                self._clients[agent].get_task(a2a_task_id),
+                timeout=self._timeouts.tool_s,
+            )
+        except TimeoutError as exc:
+            logger.warning(
+                "%s의 get_task가 %ds 안에 응답하지 않았다 — 이 행을 끝내고 "
+                "리컨실러에 넘긴다: %s",
+                agent, self._timeouts.tool_s, a2a_task_id,
+            )
+            await self._fail_by_a2a_id(a2a_task_id, "get_task_timeout", classify(exc))
+            return TASK_FAILED
+
         if not snapshot.is_terminal:
             return snapshot.state
         if snapshot.payload:
             await self.on_task_completed(a2a_task_id, snapshot.payload)
             return TASK_COMPLETED
+        # 산출물 없이 종료했다 = executor가 크래시했다는 뜻이다(위 docstring).
+        # 원인 불명의 실행 중 오류이므로 EXECUTION으로 분류한다.
+        await self._fail_by_a2a_id(a2a_task_id, snapshot.state, FailureClass.EXECUTION)
+        return TASK_FAILED
 
+    async def _fail_by_a2a_id(
+        self, a2a_task_id: str, observed: str, failure_class: FailureClass
+    ) -> None:
+        """에이전트 쪽 id로 우리 행을 찾아 실패로 확정한다.
+
+        `on_task_failed`는 우리 `task_id`를 받는다 — 에이전트에 물어 알게 된
+        실패는 그 번역을 한 단계 거쳐야 한다. 번역 실패(알 수 없는 id)는
+        경고만 남긴다: 상관시킬 행이 없으면 확정할 대상도 없다.
+        """
         async with self._sm() as s:
             t = (
                 await s.execute(
@@ -348,11 +413,8 @@ class WorkflowEngine:
             task_id = t.task_id if t is not None else None
         if task_id is None:
             logger.warning("알 수 없는 a2a_task_id: %s", a2a_task_id)
-            return TASK_FAILED
-        # 산출물 없이 종료했다 = executor가 크래시했다는 뜻이다(위 docstring).
-        # 원인 불명의 실행 중 오류이므로 EXECUTION으로 분류한다.
-        await self.on_task_failed(task_id, snapshot.state, FailureClass.EXECUTION)
-        return TASK_FAILED
+            return
+        await self.on_task_failed(task_id, observed, failure_class)
 
     async def on_task_failed(
         self,
@@ -423,8 +485,18 @@ class WorkflowEngine:
 
             t.state = TASK_COMPLETED
             t.completed_at = datetime.now(timezone.utc)
-            if "verdict" in payload:
+            if t.agent in VERIFIERS:
                 # 에이전트의 주장이 아니라 종료 코드가 판정을 만든다.
+                #
+                # **판정 여부도 에이전트가 정하지 않는다.** 예전에는
+                # `"verdict" in payload`로 이 블록을 열었는데, 그건 심판을
+                # 받을지 말지를 피심판자에게 물어보는 것과 같다 — 키 하나만
+                # 빼면 `completed` + `verdict IS NULL`인 검증자 행이 되고,
+                # 그 행은 `maybe_finish`의 verdict 개수 검사를 영원히 채우지
+                # 못한다. 리컨실러의 두 천장도 이 행을 못 본다(갇힘 천장은
+                # **열린** 행만, 재시도 캡은 **실패** 행만 센다) — 요구사항이
+                # verifying에서 FINISH를 매 주기 반복하며 영원히 돈다.
+                # 누가 검증자인지는 우리가 이미 안다. 그러니 우리가 정한다.
                 t.verdict = "PASS" if payload.get("exit_code") == 0 else "FAIL"
 
             kind = payload.get("kind")
@@ -668,7 +740,19 @@ class WorkflowEngine:
                 extra={"reason": "max_revisions_exceeded", "revision": req.revision},
             )
             return
-        await self._transition(requirement_id, WorkflowSignal.DEV_DONE)
+        # `expected=REMEDIATING`이 없으면 이 전이는 형제 메서드들과 달리 무방비다.
+        # 위 첫 가드는 상태를 바꾸지 않는 트랜잭션 뒤에 있어서, 동시 호출자 둘이
+        # **모두** 통과할 수 있다. 그 둘이 여기 도착하면 하나는 REMEDIATING →
+        # IMPLEMENTING으로 가고 다른 하나는 IMPLEMENTING + DEV_DONE → VERIFYING
+        # 으로 간다 — 전이 표에 있는 합법 전이라 예외로 막히지 않는다. 결과는
+        # revision R+1에 dev 행 2개, 검증자 행 0개, 상태 verifying: 아무도 그
+        # 두 번째 dev를 기다리지 않고 verdict도 영영 모이지 않는다.
+        # 전이가 내 것이 아니었으면 디스패치도 내 것이 아니다.
+        if not await self._transition(
+            requirement_id, WorkflowSignal.DEV_DONE,
+            expected=RequirementState.REMEDIATING,
+        ):
+            return
         await self.dispatch_agent(requirement_id, "dev")
 
     async def give_up(
