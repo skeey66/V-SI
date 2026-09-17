@@ -12,6 +12,7 @@ venv/
 node_modules/
 dist/
 build/
+*.tsbuildinfo
 
 # 환경
 .env
