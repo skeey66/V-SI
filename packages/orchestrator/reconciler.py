@@ -39,6 +39,20 @@ Task 12 추가: **재시도 상한(캡)**. `dispatch_agent`의 `attempt`(= 그 �
 캡의 근거는 리컨실리에이션 로직 자체(관찰→동작 매핑)가 아니라 "몇 번이나
 시도했는가"라는 순수 관측이므로, 여기 두어도 리컨실러 소관을 벗어나지 않는다
 (엔진의 상태 전이 규칙 자체는 여전히 `workflow.py`와 `engine._transition`에만 있다).
+
+리뷰 라운드 1 추가: **PROBE가 영원히 끝나지 않는 경우의 안전망.** 실측으로
+확인한 것 — a2a-sdk 1.1.2는 같은 컨테이너에서 연속으로 두 번째 크래시가 나면
+이벤트 소비자가 종료 상태로의 전이를 누락하는 경우가 있다(Producer 쪽 로그는
+남지만 Consumer 쪽 "Failed" 처리가 없다). 그러면 `get_task`가 영원히
+`TASK_STATE_WORKING`을 돌려주고, `refresh_task`는 비종료 상태에서 그냥
+돌아가므로 실패 행이 생기지 않는다 — 캡은 실패 행 수를 세는데 셀 게 없으니
+캡도 작동하지 않고 PROBE만 매 주기 반복된다. "모든 요구사항은 언젠가 종료
+상태에 도달한다"는 이 프로젝트의 핵심 보장이 외부 SDK의 정확성에 인질로
+잡히면 안 된다. 그래서 열린 행 자체의 나이에 **별도 상한**(`stuck_after_s`,
+`stale_after_s`보다 훨씬 크다)을 두어, 그걸 넘기면 더 묻지 않고
+`on_task_failed(..., EXECUTION)`으로 강제 확정한다(`FORCE_FAIL`). 이후로는
+평범한 실패 행이라 캡이 정상적으로 이어받는다. SDK 버그 자체는 고치지
+않는다 — 우리 층의 보장이 그 버그의 존재 여부와 무관해지도록 만들 뿐이다.
 """
 
 from __future__ import annotations
@@ -71,15 +85,20 @@ ACTIVE: tuple[RequirementState, ...] = (
     S.PLANNED, S.IMPLEMENTING, S.VERIFYING, S.REMEDIATING,
 )
 
-PROBE = "probe"          # 에이전트에 권위 있게 물어 열린 행을 확정한다
-DISPATCH = "dispatch"    # 빠진 에이전트를 새 Task로 보낸다
-ADVANCE = "advance"      # Task는 끝났는데 상태가 따라가지 못했다
-FINISH = "finish"        # 두 verdict가 다 모였는데 판정이 유실됐다
-REMEDIATE = "remediate"  # 중단된 환류를 이어받는다
-GIVE_UP = "give_up"      # 재시도 예산을 다 썼다 — 더 디스패치하지 않고 포기한다
+PROBE = "probe"            # 에이전트에 권위 있게 물어 열린 행을 확정한다
+DISPATCH = "dispatch"      # 빠진 에이전트를 새 Task로 보낸다
+ADVANCE = "advance"        # Task는 끝났는데 상태가 따라가지 못했다
+FINISH = "finish"          # 두 verdict가 다 모였는데 판정이 유실됐다
+REMEDIATE = "remediate"    # 중단된 환류를 이어받는다
+GIVE_UP = "give_up"        # 재시도 예산을 다 썼다 — 더 디스패치하지 않고 포기한다
+FORCE_FAIL = "force_fail"  # PROBE로도 안 끝난다 — 더 묻지 않고 실패로 확정한다
 
 DEFAULT_INTERVAL_S = 2.0
 DEFAULT_STALE_AFTER_S = 5.0
+#: 이보다 오래 열린 채면 에이전트 응답을 더 기다리지 않는다(SDK 결함 안전망).
+#: `stale_after_s`보다 한 자릿수 이상 커야 한다 — 정상적으로 느린 실행까지
+#: 강제로 끊으면 안 되고, SDK가 종료 상태를 영영 안 줄 때만 걸려야 한다.
+DEFAULT_STUCK_AFTER_S = 60.0
 
 
 @dataclass(frozen=True)
@@ -110,21 +129,25 @@ def last_activity(req: WorkflowRequirement, rows: list[WorkflowTask]) -> datetim
     return newest
 
 
-def _budget_exhausted(current: list[WorkflowTask], agent: str) -> bool:
-    """이 회차에서 `agent`의 실패 행 수가 분류별 재시도 상한에 닿았는가.
+def _exhausted_row(current: list[WorkflowTask], agent: str) -> WorkflowTask | None:
+    """이 회차에서 `agent`의 재시도 예산이 바닥났으면 그 근거 행을 돌려준다.
 
     행이 불변이라는 규칙과 맞물린다 — 캡을 넘겼다고 기존 실패 행을 지우거나
     고치지 않는다. 그저 **새 행을 더 만들지 않을 뿐**이다. `failure_class`가
     비어 있는 실패(옛 행, 또는 `submit()` 이전에 죽어 분류가 안 된 경우)는
     EXECUTION으로 본다 — POISON(1회)만큼 성급하지 않고 TRANSPORT(3회)만큼
     낙관적이지도 않은 중간값이다.
+
+    반환값은 `GIVE_UP` 액션의 `tasks`에 실린다 — 리뷰 라운드 1: 리컨실러가
+    "어떤 에이전트가 어떤 분류로 예산을 다 썼는지"를 실행부(`_execute`)에
+    함께 넘겨야 그 정보가 아웃박스 이벤트까지 닿는다.
     """
     failed = [t for t in current if t.agent == agent and t.state == TASK_FAILED]
     if not failed:
-        return False
+        return None
     worst = max(failed, key=lambda t: t.attempt)
     fc = FailureClass(worst.failure_class) if worst.failure_class else FailureClass.EXECUTION
-    return len(failed) >= max_attempts(fc)
+    return worst if len(failed) >= max_attempts(fc) else None
 
 
 def next_action(
@@ -132,6 +155,7 @@ def next_action(
     rows: list[WorkflowTask],
     now: datetime,
     stale_after_s: float,
+    stuck_after_s: float,
 ) -> Action | None:
     """관측에서 다음 동작 하나를 고른다. 순수 함수 — 부수 효과가 없다.
 
@@ -147,6 +171,17 @@ def next_action(
     current = [t for t in rows if t.revision == req.revision]
     open_rows = tuple(t for t in current if t.state in OPEN_TASK_STATES)
     if open_rows:
+        # 리뷰 라운드 1: PROBE로 물어봐도 SDK가 영원히 비종료 상태만 돌려줄 수
+        # 있다(실측한 a2a-sdk 1.1.2 결함) — 그러면 실패 행이 안 생겨 캡도
+        # 작동하지 않는다. 열린 행 자체가 `stuck_after_s`보다 오래됐으면 더
+        # 묻지 않고 강제로 실패 확정한다. 한 번에 한 걸음: 갇힌 행만 처리하고
+        # 나머지 열린 행은 다음 주기에 정상적으로 PROBE한다.
+        stuck = tuple(
+            t for t in open_rows
+            if (now - t.created_at).total_seconds() >= stuck_after_s
+        )
+        if stuck:
+            return Action(FORCE_FAIL, tasks=stuck)
         # 열려 있는데 오래 조용하다. 추측하지 않고 에이전트에 직접 묻는다.
         return Action(PROBE, tasks=open_rows)
 
@@ -155,21 +190,27 @@ def next_action(
     if state is S.PLANNED:
         if "planner" in done:
             return Action(ADVANCE, ("planner",))
-        if _budget_exhausted(current, "planner"):
-            return Action(GIVE_UP, ("planner",))
+        exhausted = _exhausted_row(current, "planner")
+        if exhausted is not None:
+            return Action(GIVE_UP, ("planner",), tasks=(exhausted,))
         return Action(DISPATCH, ("planner",))
     if state is S.IMPLEMENTING:
         if "dev" in done:
             return Action(ADVANCE, ("dev",))
-        if _budget_exhausted(current, "dev"):
-            return Action(GIVE_UP, ("dev",))
+        exhausted = _exhausted_row(current, "dev")
+        if exhausted is not None:
+            return Action(GIVE_UP, ("dev",), tasks=(exhausted,))
         return Action(DISPATCH, ("dev",))
     if state is S.VERIFYING:
         missing = tuple(v for v in VERIFIERS if v not in done)
         if not missing:
             return Action(FINISH)
-        exhausted = tuple(v for v in missing if _budget_exhausted(current, v))
-        return Action(GIVE_UP, exhausted) if exhausted else Action(DISPATCH, missing)
+        exhausted_rows = tuple(
+            r for r in (_exhausted_row(current, v) for v in missing) if r is not None
+        )
+        if exhausted_rows:
+            return Action(GIVE_UP, tuple(t.agent for t in exhausted_rows), tasks=exhausted_rows)
+        return Action(DISPATCH, missing)
     return Action(REMEDIATE)  # S.REMEDIATING
 
 
@@ -180,11 +221,13 @@ class Reconciler:
         engine: WorkflowEngine,
         interval_s: float = 10.0,
         stale_after_s: float = DEFAULT_STALE_AFTER_S,
+        stuck_after_s: float = DEFAULT_STUCK_AFTER_S,
     ) -> None:
         self._sm = session_maker
         self._engine = engine
         self._interval = interval_s
         self._stale_after = stale_after_s
+        self._stuck_after = stuck_after_s
 
     async def reconcile_once(self) -> int:
         """한 바퀴 돌며 수렴 동작을 수행한다. 조정한 요구사항 수를 돌려준다."""
@@ -242,7 +285,9 @@ class Reconciler:
                     )
                 )
             ).scalars().all()
-            action = next_action(req, list(rows), now, self._stale_after)
+            action = next_action(
+                req, list(rows), now, self._stale_after, self._stuck_after
+            )
 
         if action is None:
             return False
@@ -275,6 +320,22 @@ class Reconciler:
         elif action.kind == REMEDIATE:
             await self._engine.remediate(requirement_id)
         elif action.kind == GIVE_UP:
-            await self._engine.give_up(requirement_id)
+            # 여러 에이전트가 동시에 예산을 다 썼어도(드물다 — qa·security가
+            # 같은 주기에 함께 소진) 전이는 한 번만 성공한다. 첫 번째 뒤엔
+            # 상태가 이미 ESCALATED라 이후 호출은 engine.give_up의 expected
+            # 가드에 걸려 조용히 반환된다 — 두 번째 이후 에이전트의 사유는
+            # 이벤트에 남지 않지만, 상태 전이가 중복되거나 터지지는 않는다.
+            for task in action.tasks:
+                fc = FailureClass(task.failure_class) if task.failure_class else FailureClass.EXECUTION
+                await self._engine.give_up(requirement_id, task.agent, fc)
+        elif action.kind == FORCE_FAIL:
+            # 리뷰 라운드 1: PROBE로도 끝나지 않는 행(SDK 결함으로 종료 상태가
+            # 영영 안 오는 경우)에 대한 안전망. 더 묻지 않고 실행 중 원인
+            # 불명 오류로 확정한다 — 이후로는 평범한 실패 행이라 다음 주기의
+            # 캡 계산이 정상적으로 이어받는다.
+            for task in action.tasks:
+                await self._engine.on_task_failed(
+                    task.task_id, "stuck_beyond_ceiling", FailureClass.EXECUTION
+                )
         else:  # pragma: no cover - 방어적
             raise ValueError(f"알 수 없는 동작: {action.kind}")

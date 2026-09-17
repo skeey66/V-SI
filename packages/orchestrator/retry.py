@@ -63,6 +63,25 @@ def classify(exc: Exception) -> FailureClass:
     return FailureClass.EXECUTION
 
 
+def is_undelivered(exc: Exception) -> bool:
+    """이 예외가 **요청이 상대에게 닿지 않았다는 것을 증명하는가**.
+
+    Task 12 수정: `dispatch_agent`의 제자리 재시도(같은 행, 같은 멱등성 키)는
+    상대가 이전 요청을 이미 받았을 가능성이 0일 때만 안전하다. 연결 자체가
+    거부됐거나(포트가 안 열려 있다) TCP 연결 수립 자체가 타임아웃났다면
+    바이트 하나도 나가지 않았다는 뜻이라 그 자리에서 다시 보내도 에이전트
+    쪽에 중복 Task가 생기지 않는다.
+
+    그 외는 전부 모호하다고 본다 — 읽기 타임아웃(요청은 갔고 응답만 못 받음),
+    5xx(요청을 받고 나서 실패했을 수 있음), `asyncio.wait_for`의 내장
+    `TimeoutError`(제출 왕복 전체를 감싸므로 에이전트가 이미 작업을 받아 처리
+    중이었을 가능성을 배제 못함) 모두 여기 해당한다. 모호한 실패는 제자리
+    재시도 대상이 아니다 — 이 행을 실패로 확정하고, 리컨실러가 **새 행·새
+    멱등성 키**로 다시 보내게 한다(`reconciler.next_action`의 DISPATCH).
+    """
+    return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout))
+
+
 def max_attempts(fc: FailureClass) -> int:
     """이 실패 분류에서 허용하는 최대 시도 횟수(최초 시도 포함)."""
     return _MAX_ATTEMPTS[fc]

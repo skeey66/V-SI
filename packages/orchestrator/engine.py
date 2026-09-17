@@ -40,7 +40,13 @@ from orchestrator.idempotency import idempotency_key
 from orchestrator.models import Artifact, WorkflowRequirement, WorkflowTask
 from orchestrator.outbox import record_event
 from orchestrator.policy import TimeoutConfig
-from orchestrator.retry import FailureClass, backoff_seconds, classify, max_attempts
+from orchestrator.retry import (
+    FailureClass,
+    backoff_seconds,
+    classify,
+    is_undelivered,
+    max_attempts,
+)
 from orchestrator.workflow import RequirementState, WorkflowSignal, next_state
 
 logger = logging.getLogger(__name__)
@@ -202,6 +208,21 @@ class WorkflowEngine:
                 break
             except Exception as exc:
                 last_failure = classify(exc)
+                # 리뷰 라운드 1 수정: 제자리 재시도(같은 행·같은 멱등성 키)는
+                # 요청이 상대에게 **닿지 않았다는 것이 증명될 때만** 안전하다.
+                # 그 외(읽기 타임아웃·5xx·wait_for 타임아웃 등)는 에이전트가
+                # 이미 작업을 받았을 수 있어, 그 자리에서 다시 보내면 같은
+                # 작업이 에이전트 쪽에 두 번 생길 위험이 있다(첫 Task는 고아가
+                # 되고 그 완료 푸시는 상관시킬 행이 없어 버려진다). 모호한
+                # 실패는 즉시 이 행을 실패로 확정하고, 리컨실러가 **새 행·새
+                # 멱등성 키**로 다시 보내게 한다.
+                if not is_undelivered(exc):
+                    logger.warning(
+                        "%s 제출 실패가 모호하다(전달 여부 불명) — 제자리 "
+                        "재시도하지 않는다 (%s): %s",
+                        agent, last_failure.value, exc,
+                    )
+                    break
                 if submit_attempt >= max_attempts(last_failure):
                     logger.warning(
                         "%s 제출을 %d회 만에 포기한다 (%s): %s",
@@ -466,6 +487,7 @@ class WorkflowEngine:
         requirement_id: str,
         signal: WorkflowSignal,
         expected: RequirementState | None = None,
+        extra: dict | None = None,
     ) -> bool:
         """상태를 전이하고 같은 트랜잭션에 이벤트를 남긴다. 전이했으면 True.
 
@@ -474,6 +496,13 @@ class WorkflowEngine:
         읽기와 전이 사이가 창으로 남아 같은 경합이 재현된다 — 그래서 검사를 여기
         잠금 안으로 들여왔다. `expected`가 없으면 종전대로 허용되지 않는 신호에
         `IllegalTransition`을 던진다(호출자가 전제를 이미 보장하는 경로들이다).
+
+        `extra`(리뷰 라운드 1 추가): 이벤트 페이로드에 `{"to", "signal"}` 외에
+        더 남기고 싶은 필드. `LIMIT_EXCEEDED`는 도달 경로가 둘이다(`remediate`의
+        회차 상한, `give_up`의 재시도 예산 소진) — 둘 다 같은 신호·같은 목적지라
+        페이로드에 원인을 적지 않으면 운영자가 구분할 수 없다. 상태 전이와
+        같은 트랜잭션 안에서 기록해야 하므로(불변식) 별도 `record_event` 호출이
+        아니라 이 메서드가 직접 병합한다.
         """
         async with self._sm() as s:
             req = (
@@ -490,12 +519,15 @@ class WorkflowEngine:
                 )
                 return False
             req.state = next_state(RequirementState(req.state), signal).value
+            payload = {"to": req.state, "signal": signal.value}
+            if extra:
+                payload.update(extra)
             record_event(
                 s,
                 "requirement",
                 requirement_id,
                 "state_changed",
-                {"to": req.state, "signal": signal.value},
+                payload,
             )
             await s.commit()
             return True
@@ -608,12 +640,21 @@ class WorkflowEngine:
             await s.commit()
 
         if exceeded:
-            await self._transition(requirement_id, WorkflowSignal.LIMIT_EXCEEDED)
+            await self._transition(
+                requirement_id,
+                WorkflowSignal.LIMIT_EXCEEDED,
+                extra={"reason": "max_revisions_exceeded", "revision": req.revision},
+            )
             return
         await self._transition(requirement_id, WorkflowSignal.DEV_DONE)
         await self.dispatch_agent(requirement_id, "dev")
 
-    async def give_up(self, requirement_id: str) -> None:
+    async def give_up(
+        self,
+        requirement_id: str,
+        agent: str,
+        failure_class: FailureClass | str | None = None,
+    ) -> None:
         """재시도 예산을 다 쓴 에이전트가 있으면 요구사항을 포기 상태로 보낸다.
 
         공개 메서드다 — 리컨실러의 `next_action`이 관측(실패 행 수와
@@ -628,6 +669,12 @@ class WorkflowEngine:
         어디서나 불릴 수 있어 **먼저 관측한 상태를 `expected`로 넘겨** 그
         사이에 다른 경로가 먼저 전이시켰으면(`_transition`이 False) 조용히
         돌아간다.
+
+        `agent`·`failure_class`(리뷰 라운드 1 추가): 이전엔 이 정보가 호출자
+        (`Action.agents`)까지만 있고 아웃박스 이벤트엔 닿지 않아, 운영자가
+        "재시도 예산 소진"(`give_up`)과 "회차 상한 초과"(`remediate`)를
+        구분할 수도, 어느 에이전트가 원인인지 알 수도 없었다. `_transition`의
+        `extra`로 같은 트랜잭션·같은 이벤트에 실어 보낸다.
         """
         async with self._sm() as s:
             req = await s.get(WorkflowRequirement, requirement_id)
@@ -640,8 +687,16 @@ class WorkflowEngine:
             RequirementState.VERIFYING,
         ):
             return  # 이미 다른 경로가 끝냈거나(터미널) REMEDIATING(다른 메서드 소관).
+        fc_value = failure_class.value if isinstance(failure_class, FailureClass) else failure_class
         transitioned = await self._transition(
-            requirement_id, WorkflowSignal.LIMIT_EXCEEDED, expected=observed
+            requirement_id,
+            WorkflowSignal.LIMIT_EXCEEDED,
+            expected=observed,
+            extra={
+                "reason": "retry_budget_exhausted",
+                "agent": agent,
+                "failure_class": fc_value,
+            },
         )
         if not transitioned:
             logger.info(

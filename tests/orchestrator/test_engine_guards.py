@@ -20,8 +20,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from orchestrator.db import make_engine
 from orchestrator.engine import WorkflowEngine
-from orchestrator.models import WorkflowRequirement, WorkflowTask
+from orchestrator.models import OutboxEvent, WorkflowRequirement, WorkflowTask
 from orchestrator.policy import TimeoutConfig
+from orchestrator.retry import FailureClass
 from orchestrator.workflow import RequirementState
 
 TEST_DB_URL = os.environ.get(
@@ -106,10 +107,40 @@ async def test_give_up_transitions_when_premise_holds(session, state) -> None:
     rid = f"REQ-G-giveup-{state.value}"
     db, maker, workflow = await _engine_over(rid, state, session)
     try:
-        await workflow.give_up(rid)
+        await workflow.give_up(rid, "dev", FailureClass.EXECUTION)
         async with maker() as s:
             req = await s.get(WorkflowRequirement, rid)
             assert RequirementState(req.state) is RequirementState.ESCALATED
+    finally:
+        await db.dispose()
+
+
+async def test_give_up_records_agent_and_failure_class_in_the_event(session) -> None:
+    """리뷰 라운드 1: 운영자가 "누가·왜 포기됐는지"를 아웃박스에서 읽을 수 있어야 한다.
+
+    `to == "escalated"`만으로는 회차 상한 초과(`remediate`)와 재시도 예산 소진
+    (`give_up`)을 구분할 수 없다 — `reason`·`agent`·`failure_class`를 같은
+    `state_changed` 이벤트 페이로드에 남긴다.
+    """
+    rid = "REQ-G-giveup-event"
+    db, maker, workflow = await _engine_over(rid, RequirementState.IMPLEMENTING, session)
+    try:
+        await workflow.give_up(rid, "dev", FailureClass.EXECUTION)
+        async with maker() as s:
+            events = (
+                await s.execute(
+                    select(OutboxEvent).where(
+                        OutboxEvent.aggregate_id == rid,
+                        OutboxEvent.event_type == "state_changed",
+                    )
+                )
+            ).scalars().all()
+        escalations = [e for e in events if e.payload.get("to") == "escalated"]
+        assert len(escalations) == 1
+        payload = escalations[0].payload
+        assert payload["reason"] == "retry_budget_exhausted"
+        assert payload["agent"] == "dev"
+        assert payload["failure_class"] == "execution"
     finally:
         await db.dispose()
 
@@ -119,7 +150,7 @@ async def test_give_up_does_nothing_when_state_already_moved_on(session) -> None
     rid = "REQ-G-giveup-moved"
     db, maker, workflow = await _engine_over(rid, RequirementState.ACCEPTED, session)
     try:
-        await workflow.give_up(rid)  # 터지지 않는다 — IllegalTransition을 던지지 않는다
+        await workflow.give_up(rid, "dev", FailureClass.EXECUTION)  # 터지지 않는다
         await _assert_untouched(maker, rid, RequirementState.ACCEPTED)
     finally:
         await db.dispose()
@@ -135,7 +166,7 @@ async def test_give_up_does_not_touch_remediating(session) -> None:
     rid = "REQ-G-giveup-remediating"
     db, maker, workflow = await _engine_over(rid, RequirementState.REMEDIATING, session)
     try:
-        await workflow.give_up(rid)
+        await workflow.give_up(rid, "dev", FailureClass.EXECUTION)
         await _assert_untouched(maker, rid, RequirementState.REMEDIATING)
     finally:
         await db.dispose()

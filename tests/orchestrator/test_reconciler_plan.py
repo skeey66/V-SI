@@ -15,9 +15,11 @@ from orchestrator.reconciler import (
     ADVANCE,
     DISPATCH,
     FINISH,
+    FORCE_FAIL,
     GIVE_UP,
     PROBE,
     REMEDIATE,
+    Action,
     next_action,
 )
 from orchestrator.models import WorkflowRequirement, WorkflowTask
@@ -25,7 +27,10 @@ from orchestrator.workflow import RequirementState
 
 NOW = datetime(2026, 9, 17, 12, 0, 0, tzinfo=timezone.utc)
 STALE_AFTER_S = 5.0
-OLD = 600.0  # 충분히 오래된 나이(초)
+OLD = 600.0  # 충분히 오래된 나이(초) — stale이지만 아직 stuck은 아니다
+# 다른 모든 테스트가 기본 나이로 OLD(600초)를 쓰므로, stuck 문턱은 그보다
+# 훨씬 커야 "그냥 오래 머문 행"과 "stuck 안전망 대상"이 섞이지 않는다.
+STUCK_AFTER_S = OLD * 2  # 1200초
 
 
 def _req(state: RequirementState, revision: int = 1, age_s: float = OLD):
@@ -68,7 +73,7 @@ def _task(
 
 
 def _plan(req, rows):
-    return next_action(req, rows, NOW, STALE_AFTER_S)
+    return next_action(req, rows, NOW, STALE_AFTER_S, STUCK_AFTER_S)
 
 
 # --------------------------------------------------------- 케이스 1: 유령 working
@@ -186,7 +191,7 @@ def test_terminal_requirement_is_never_touched() -> None:
 def test_fresh_requirement_without_tasks_is_left_to_the_dispatcher() -> None:
     """방금 만들어진 요구사항은 아직 디스패치 중일 수 있다 — 끼어들지 않는다."""
     req = _req(RequirementState.PLANNED, age_s=0.5)
-    assert next_action(req, [], NOW, STALE_AFTER_S) is None
+    assert next_action(req, [], NOW, STALE_AFTER_S, STUCK_AFTER_S) is None
 
 
 def test_previous_revision_rows_do_not_count_as_progress() -> None:
@@ -221,12 +226,13 @@ def test_repeated_execution_crashes_exhaust_budget_and_give_up() -> None:
     계약이다(Task 12). Task 행은 그대로 두고(불변) 더 이상 새 행을 만들지 않는다.
     """
     req = _req(RequirementState.IMPLEMENTING)
+    second = _task("dev", "failed", failure_class="execution", attempt=2)
     rows = [
         _task("planner", "completed"),
         _task("dev", "failed", failure_class="execution", attempt=1),
-        _task("dev", "failed", failure_class="execution", attempt=2),
+        second,
     ]
-    assert _plan(req, rows) == _give_up("dev")
+    assert _plan(req, rows) == _give_up(second)
 
 
 def test_transport_budget_is_larger_than_execution() -> None:
@@ -243,46 +249,79 @@ def test_transport_budget_is_larger_than_execution() -> None:
 def test_poison_never_gets_a_second_try() -> None:
     """POISON 상한은 1 — 첫 실패에서 바로 포기한다(재시도해도 결정적으로 같다)."""
     req = _req(RequirementState.PLANNED)
-    rows = [_task("planner", "failed", failure_class="poison", attempt=1)]
-    assert _plan(req, rows) == _give_up("planner")
+    first = _task("planner", "failed", failure_class="poison", attempt=1)
+    assert _plan(req, [first]) == _give_up(first)
 
 
 def test_unclassified_failure_falls_back_to_execution_budget() -> None:
     """`failure_class`가 비어 있던 옛 실패 행도 캡이 있어야 한다 — EXECUTION으로 본다."""
     req = _req(RequirementState.PLANNED)
+    second = _task("planner", "failed", failure_class=None, attempt=2)
     rows = [
         _task("planner", "failed", failure_class=None, attempt=1),
-        _task("planner", "failed", failure_class=None, attempt=2),
+        second,
     ]
-    assert _plan(req, rows) == _give_up("planner")
+    assert _plan(req, rows) == _give_up(second)
 
 
 def test_exhausted_verifier_gives_up_during_verifying() -> None:
     """검증 에이전트도 같은 캡을 받는다 — verifying 도중에도 영원히 돌지 않는다."""
     req = _req(RequirementState.VERIFYING)
+    second = _task("security", "failed", failure_class="execution", attempt=2)
     rows = [
         _task("planner", "completed"),
         _task("dev", "completed"),
         _task("qa", "completed", verdict="PASS"),
         _task("security", "failed", failure_class="execution", attempt=1),
-        _task("security", "failed", failure_class="execution", attempt=2),
+        second,
     ]
-    assert _plan(req, rows) == _give_up("security")
+    assert _plan(req, rows) == _give_up(second)
+
+
+# --------------------------------------------- SDK 결함 안전망: 영원히 열려 있는 행
+
+
+def test_row_stuck_past_ceiling_is_force_failed() -> None:
+    """SDK가 종료 상태를 영영 안 주는 버그가 있어도 시스템 보장은 거기 기대지 않는다.
+
+    `stale_after_s`를 넘긴 열린 행은 보통 PROBE로 다시 물어본다. 그런데 물어봐도
+    답이 영원히 `working`으로 오면(관측된 a2a-sdk 1.1.2 결함) PROBE만 무한
+    반복되고 실패 행이 생기지 않아 캡도 작동하지 않는다. `stuck_after_s`를 넘기면
+    더 묻지 않고 이 행을 강제로 실패 확정한다 — 그래야 캡이 다음 주기에 이어받는다.
+    """
+    req = _req(RequirementState.IMPLEMENTING)
+    ancient = _task("dev", "working", age_s=STUCK_AFTER_S + 30)
+    action = _plan(req, [_task("planner", "completed"), ancient])
+    assert action == Action(FORCE_FAIL, tasks=(ancient,))
+
+
+def test_row_stale_but_not_yet_stuck_is_still_probed() -> None:
+    """stale 문턱은 넘었지만 stuck 문턱 전이면 여전히 정상적으로 다시 물어본다."""
+    req = _req(RequirementState.IMPLEMENTING)
+    stalish = _task("dev", "working", age_s=STALE_AFTER_S + 1)
+    action = _plan(req, [_task("planner", "completed"), stalish])
+    assert action.kind == PROBE
+
+
+def test_only_the_stuck_row_is_force_failed_among_open_rows() -> None:
+    """검증 에이전트 둘 중 하나만 갇혀 있으면 그 하나만 강제 실패하고 나머지는 건드리지 않는다.
+
+    "한 번에 한 걸음" 원칙: 나머지 열린 행은 다음 주기에 다시 관찰해 PROBE한다.
+    """
+    req = _req(RequirementState.VERIFYING)
+    stuck = _task("qa", "working", age_s=STUCK_AFTER_S + 10)
+    fresh_ish = _task("security", "working", age_s=STALE_AFTER_S + 1)
+    action = _plan(req, [_task("planner", "completed"), _task("dev", "completed"), stuck, fresh_ish])
+    assert action == Action(FORCE_FAIL, tasks=(stuck,))
 
 
 def _dispatch(*agents: str):
-    from orchestrator.reconciler import Action
-
     return Action(DISPATCH, tuple(agents))
 
 
 def _advance(agent: str):
-    from orchestrator.reconciler import Action
-
     return Action(ADVANCE, (agent,))
 
 
-def _give_up(*agents: str):
-    from orchestrator.reconciler import Action
-
-    return Action(GIVE_UP, tuple(agents))
+def _give_up(*tasks: WorkflowTask):
+    return Action(GIVE_UP, tuple(t.agent for t in tasks), tasks=tuple(tasks))
