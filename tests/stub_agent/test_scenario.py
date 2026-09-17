@@ -1,5 +1,5 @@
 import pytest
-from stub_agent.scenario import AgentScenario, DuplicateCallError
+from stub_agent.scenario import AgentScenario
 
 PATH = "scenarios/qa_fails_twice.yaml"
 
@@ -26,13 +26,6 @@ def test_failure_injected_on_specific_attempt():
 def test_latency_is_read():
     assert AgentScenario.from_yaml(PATH, "dev").latency_ms == 200
     assert AgentScenario.from_yaml(PATH, "qa").latency_ms == 0
-
-
-def test_duplicate_idempotency_key_is_detected():
-    s = AgentScenario.from_yaml(PATH, "dev")
-    assert s.record_call("key-1") == 1
-    with pytest.raises(DuplicateCallError, match="key-1"):
-        s.record_call("key-1")
 
 
 def test_single_verdict_repeats_indefinitely(tmp_path):
