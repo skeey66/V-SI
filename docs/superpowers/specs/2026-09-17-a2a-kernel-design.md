@@ -50,12 +50,21 @@ LLM을 전혀 호출하지 않고 오케스트레이션 전 구간이 동작하�
 |---|---|---|
 | 언어 | Python 3.11 | Python 3.10 이상 ✓ |
 | API 서버 | FastAPI | FastAPI ✓ |
-| 에이전트 통신 | `a2a-sdk` 1.x (A2A 스펙 1.0), HTTP+JSON 바인딩 | A2A Python SDK 1.0 ✓ |
-| 상태 관리 | PostgreSQL | SQLite 또는 PostgreSQL ✓ |
+| 에이전트 통신 | `a2a-sdk` **1.1.2** (A2A 스펙 1.0), HTTP+JSON 바인딩 | A2A Python SDK 1.0 ✓ |
+| 상태 관리 | PostgreSQL (`DatabaseTaskStore`, SQLAlchemy async) | SQLite 또는 PostgreSQL ✓ |
 | 관측성 | OpenTelemetry → Jaeger | OpenTelemetry ✓ |
 | 대시보드 | React (실시간 그래프) | React 또는 Streamlit ✓ |
 | 단위 테스트 | pytest | pytest ✓ |
 | 컨테이너 | Docker / docker compose | Docker ✓ |
+
+`a2a-sdk[fastapi,http-server,telemetry,postgresql]` extras를 사용한다.
+
+**`[telemetry]` extra는 `opentelemetry-api`/`-sdk`만 설치하며 HTTP 계측을 포함하지 않는다.**
+크로스 서비스 트레이스 전파를 위해 다음을 직접 추가한다 (2026-09-17 스파이크에서 확인):
+
+- `opentelemetry-instrumentation-fastapi` — 서버 측 컨텍스트 추출
+- `opentelemetry-instrumentation-httpx` — 클라이언트 측 컨텍스트 주입
+- `opentelemetry-exporter-otlp` — Collector 전송
 
 SP2에서 추가: MCP Python SDK, Ruff, mypy, Bandit, Semgrep, Playwright.
 
@@ -107,12 +116,17 @@ docker compose로 10개 서비스를 띄운다 — `orchestrator`, `planner`, `d
 
 | 계층 | 소유 |
 |---|---|
-| `A2AFastAPIApplication` — ASGI 앱, 라우팅, `/.well-known/` 카드 게시 | SDK |
+| FastAPI 앱 인스턴스 | **우리** |
+| `create_agent_card_routes()` / `create_jsonrpc_routes()` / `create_rest_routes()` → `add_a2a_routes_to_fastapi(app, ...)` | SDK (조립은 우리) |
 | `DefaultRequestHandler` — Task 생성·상태 전이·이벤트·push notification | SDK |
-| `TaskStore` → PostgreSQL — Task 지속 | SDK (설정만 우리) |
+| `DatabaseTaskStore` → PostgreSQL — Task 지속 | SDK (설정만 우리) |
 | `AgentExecutor` — **유일한 확장 지점** | 우리 |
-| `AgentCard` 선언 — skills, `authentication`, `capabilities.streaming`, I/O modes | 우리 |
-| `agent-runtime` — 부트스트랩, OTel 설정, 헬스체크, 에러 매핑 | 우리 (얇게) |
+| `AgentCard` 선언 — skills, `security_schemes`, `security_requirements`, `capabilities.streaming`, `capabilities.push_notifications`, I/O modes | 우리 |
+| `agent-runtime` — 앱 생성, 라우트 조립, OTel 계측, 헬스체크, 에러 매핑 | 우리 (얇게) |
+
+SDK는 ASGI 애플리케이션을 만들어 주지 않고 **라우트를 우리 FastAPI 앱에 붙이는 방식**이다
+(1.1.2 기준. `A2AFastAPIApplication` 같은 팩토리 클래스는 존재하지 않는다). 앱을 우리가 소유하므로
+`FastAPIInstrumentor` 계측과 헬스체크 엔드포인트를 `agent-runtime`에서 자연스럽게 추가할 수 있다.
 
 `agent-runtime`은 의도적으로 얇다. Task 지속·라이프사이클·전송 계층이 전부 SDK 소관이므로
 공용 래퍼가 할 일은 기동 보일러플레이트와 계측뿐이다. 이 경계를 넘어 SDK 기능을 재구현하지 않는다.
@@ -141,7 +155,11 @@ docker compose로 10개 서비스를 띄운다 — `orchestrator`, `planner`, `d
 
 ## 6. 데이터 모델
 
-SDK가 자체 Task 테이블을 소유한다. 아래는 오케스트레이터 소유 스키마다.
+SDK가 자체 Task 테이블(`tasks`, `push_notification_configs`)을 소유한다. `create_task_model(table_name, base)`에
+커스텀 `DeclarativeBase`를 넘겨 SDK 테이블을 별도 스키마(`a2a`)에 배치하고, 아래 오케스트레이터
+스키마(`public`)와 분리한다. 같은 DB·다른 스키마이므로 아웃박스를 한 트랜잭션에 묶을 수 있다.
+
+아래는 오케스트레이터 소유 스키마다.
 
 ```sql
 -- 요구사항 단위 워크플로 상태
@@ -399,15 +417,33 @@ GitHub Actions. 단위·계약은 매 푸시, 통합·실패주입은 docker com
 
 5번이 SP1의 정체성이다. 인프라 완성을 토큰 없이 증명한다.
 
-## 11. 미해결 사항
+## 11. SDK 검증 결과 (2026-09-17 스파이크)
 
-SP1 구현 중 결정하며, 계획 수립 시 조사 항목으로 넣는다.
+`a2a-sdk` 1.1.2를 실제 설치해 API 표면을 확인했다. 검증 코드는 폐기했다.
 
-- `a2a-sdk`의 PostgreSQL `TaskStore`가 요구하는 마이그레이션 방식과, 오케스트레이터 스키마와의
- DB·스키마 분리 여부 (같은 DB 내 별도 스키마를 기본으로 하되 SDK 제약 확인 필요)
-- SDK push notification의 재시도·인증 방식이 우리 Push Receiver 설계와 맞는지
-- `AgentCard.authentication`에 실제로 쓸 방식 — SP1은 내부 네트워크 전제로 공유 시크릿을
- 기본으로 하되, 초기 요구 정의 요구("API 키를 Agent Card나 메시지에 포함하지 않는다")를 위반하지 않는
- 형태여야 함
-- OTel 컨텍스트가 A2A HTTP 호출 경계를 넘어 전파되는지, SDK `[telemetry]` extra가 이를
- 자동 처리하는지
+| 항목 | 결과 |
+|---|---|
+| PostgreSQL Task 지속 | `DatabaseTaskStore(engine: AsyncEngine, table_name, create_table, owner_resolver)` 존재. `a2a.migrations` + `a2a_db_cli`로 마이그레이션 제공 |
+| 스키마 분리 | `create_task_model(table_name, base)`로 커스텀 `Base` 주입 가능 → 별도 스키마 배치 가능 |
+| push notification | `ClientConfig.push_notification_config`로 클라이언트가 웹훅 등록. 에이전트는 `BasePushNotificationSender`가 `X-A2A-Notification-Token` 헤더를 붙여 POST |
+| 푸시 설정 저장 | `DatabasePushNotificationConfigStore` — `encryption_key` 지원 |
+| 폴백 | `ClientConfig.polling` 존재 → 푸시 실패 시 폴링 경로 확보 |
+| OTel 전파 | **자동 아님.** `[telemetry]` extra는 `opentelemetry-api`/`-sdk`만 설치. 계측 패키지를 직접 추가해야 함 (3절 참조) |
+| httpx 주입 | `ClientConfig.httpx_client`로 계측된 클라이언트 주입 가능 → 전파 경로 확보 |
+| ASGI 앱 | `A2AFastAPIApplication` **없음**. `add_a2a_routes_to_fastapi()`로 우리 앱에 라우트 부착 |
+| AgentCard 필드 | `name`, `description`, `supported_interfaces`, `provider`, `version`, `documentation_url`, `capabilities`, `security_schemes`, `security_requirements`, `default_input_modes`, `default_output_modes`, `skills`, `signatures`, `icon_url` |
+| AgentCapabilities 필드 | `streaming`, `push_notifications`, `extensions`, `extended_agent_card` |
+
+**보안 요구 충족 경로 확인.** 푸시 토큰은 `DatabasePushNotificationConfigStore`에 저장되고
+AgentCard에는 포함되지 않는다. 초기 요구 정의 안전성 요구 *"API 키를 Agent Card나 메시지에 포함하지
+않는다"* 를 SDK 구조가 이미 만족한다. SP1의 `security_schemes`는 내부 네트워크 전제의
+공유 시크릿 방식으로 선언한다.
+
+### 남은 조사 항목
+
+구현 중 확인하며, 설계를 뒤집지 않는 범위다.
+
+- `DatabaseTaskStore`의 `owner_resolver` 기본값(`resolve_user_scope`)이 단일 테넌트 환경에서
+ 어떻게 동작하는지 — 초기 요구 정의의 "작업 소유권" 요구와 연결 가능한지 검토
+- `a2a_db_cli` 마이그레이션을 docker compose 기동 순서에 어떻게 끼울지
+- `FastAPIInstrumentor`가 SDK가 추가한 라우트까지 계측하는지 (부착 순서 의존 가능성)
