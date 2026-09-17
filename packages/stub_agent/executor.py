@@ -4,10 +4,11 @@ import asyncio
 from google.protobuf import struct_pb2
 from google.protobuf.json_format import ParseDict
 
+from a2a.helpers import new_task
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
-from a2a.types import Part
+from a2a.types import Part, TaskState
 
 from stub_agent.scenario import AgentScenario
 
@@ -85,7 +86,25 @@ class StubExecutor(AgentExecutor):
         전파한다 — SDK는 execute()의 처리되지 않은 예외를 태스크의
         TASK_STATE_ERROR로 변환한다(에이전트 프로세스 크래시를 흉내낸다).
         이는 "FAIL 판정"(정상 완료, exit_code != 0)과는 다른 경로다.
+
+        Task 10에서 추가된 것(Task 8은 기동만 검증했고 실행 경로는 한 번도
+        돌지 않았다): **상태 갱신 이벤트보다 Task 이벤트를 먼저 큐에 넣어야 한다.**
+        SDK의 `TaskManager`는 Task가 저장되기 전에 도착한 `TaskStatusUpdateEvent`를
+        `InvalidAgentResponseError: Agent should enqueue Task before
+        TaskStatusUpdateEvent event`로 거절한다
+        (`a2a/server/agent_execution/active_task.py`). 클라이언트가 task_id를
+        정해서 보낼 수는 없으므로(서버가 `TaskNotFoundError`로 막는다) 첫 Task
+        생성은 반드시 여기서 일어난다.
         """
+        if context.current_task is None:
+            await event_queue.enqueue_event(
+                new_task(
+                    task_id=context.task_id,
+                    context_id=context.context_id,
+                    state=TaskState.TASK_STATE_SUBMITTED,
+                )
+            )
+
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)
         await updater.start_work()
 
