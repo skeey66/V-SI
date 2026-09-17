@@ -32,3 +32,17 @@ def test_injected_crash_raises():
     ex = StubExecutor(AgentScenario.from_yaml(PATH, "dev"), "dev")
     with pytest.raises(StubCrash):
         ex.build_payload(attempt=2)
+
+
+def test_invocation_counter_advances_without_explicit_attempt():
+    ex = StubExecutor(AgentScenario.from_yaml(PATH, "qa"), "qa")
+    # attempt 인자 없이 호출하면 스텁이 자기 순번을 센다
+    assert [ex.build_payload()["verdict"] for _ in range(3)] == ["FAIL", "FAIL", "PASS"]
+
+
+def test_crash_fires_on_second_invocation_without_explicit_attempt():
+    ex = StubExecutor(AgentScenario.from_yaml(PATH, "dev"), "dev")
+    ex.build_payload()                      # 1회차 — 정상
+    with pytest.raises(StubCrash):
+        ex.build_payload()                  # 2회차 — 시나리오가 주입한 크래시
+    ex.build_payload()                       # 3회차 — 재시도, 정상
