@@ -12,12 +12,24 @@ services:
       timeout: 3s
       retries: 20
 
+  orchestrator:
+    build: .
+    command: ["uvicorn", "orchestrator.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
+      VSI_PUSH_URL: http://orchestrator:8000/push
+      VSI_PUSH_TOKEN: ${VSI_PUSH_TOKEN:-dev-only-token}
+    depends_on:
+      postgres: { condition: service_healthy }
+    ports: ["8000:8000"]
+
   planner: &agent
     build: .
     environment:
       VSI_AGENT: planner
       VSI_BASE_URL: http://planner:8000
       VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
+      VSI_SCENARIO: ${VSI_SCENARIO:-scenarios/all_pass.yaml}
     depends_on:
       postgres: { condition: service_healthy }
     ports: ["8001:8000"]
@@ -27,6 +39,7 @@ services:
       VSI_AGENT: dev
       VSI_BASE_URL: http://dev:8000
       VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
+      VSI_SCENARIO: ${VSI_SCENARIO:-scenarios/all_pass.yaml}
     ports: ["8002:8000"]
   qa:
     <<: *agent
@@ -34,6 +47,7 @@ services:
       VSI_AGENT: qa
       VSI_BASE_URL: http://qa:8000
       VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
+      VSI_SCENARIO: ${VSI_SCENARIO:-scenarios/all_pass.yaml}
     ports: ["8003:8000"]
   security:
     <<: *agent
@@ -41,4 +55,5 @@ services:
       VSI_AGENT: security
       VSI_BASE_URL: http://security:8000
       VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
+      VSI_SCENARIO: ${VSI_SCENARIO:-scenarios/all_pass.yaml}
     ports: ["8004:8000"]
