@@ -109,3 +109,39 @@ def test_read_file_permission_denied_is_error_result(tmp_path: Path) -> None:
     finally:
         target.chmod(0o644)
     assert not result.ok
+
+
+def test_write_file_error_detail_does_not_leak_workspace_root(tmp_path: Path) -> None:
+    """스펙: 모델은 워크스페이스 루트를 몰라야 한다 — list_files 와 같은 불변식."""
+    assert write_file(tmp_path, "foo", "x = 1").ok
+    result = write_file(tmp_path, "foo/bar.py", "y = 2")
+    assert not result.ok
+    assert str(tmp_path) not in result.detail
+    assert str(tmp_path.resolve()) not in result.detail
+
+
+def test_run_tests_missing_root_error_detail_does_not_leak_workspace_root(tmp_path: Path) -> None:
+    missing_root = tmp_path / "does-not-exist"
+    result = run_tests(missing_root)
+    assert not result.ok
+    assert str(missing_root) not in result.detail
+    assert str(missing_root.resolve()) not in result.detail
+
+
+def test_read_file_permission_denied_detail_does_not_leak_workspace_root(tmp_path: Path) -> None:
+    write_file(tmp_path, "secret.py", "x = 1")
+    target = tmp_path / "secret.py"
+    target.chmod(0o000)
+    try:
+        result = read_file(tmp_path, "secret.py")
+    finally:
+        target.chmod(0o644)
+    assert not result.ok
+    assert str(tmp_path) not in result.detail
+    assert str(tmp_path.resolve()) not in result.detail
+
+
+def test_write_file_with_lone_surrogate_is_error_result_not_exception(tmp_path: Path) -> None:
+    """Ollama 가 JSON 으로 돌려주는 도구 인자에 깨진 대리쌍이 섞일 수 있다."""
+    result = write_file(tmp_path, "bad.py", "x = '\ud800'")
+    assert not result.ok
