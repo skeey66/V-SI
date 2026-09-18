@@ -35,20 +35,33 @@ def _tail(text: str, limit: int = OUTPUT_TAIL_BYTES) -> str:
     return "...(앞부분 절단)...\n" + raw[-limit:].decode("utf-8", errors="replace")
 
 
-def _os_error_detail(root: Path, exc: OSError) -> str:
-    """OSError 메시지에서 워크스페이스 루트의 절대경로를 지운다.
+def _strip_root(root: Path, text: str) -> str:
+    """텍스트에서 워크스페이스 루트의 절대경로를 지운다.
 
-    errno 범주(예: "Permission denied")는 모델에게 유용하니 남기지만, 절대경로가
-    그대로 섞여 나가면 list_files 가 지키는 "루트를 드러내지 않는다" 불변식이
-    에러 경로로 새는 우회로가 된다. 루트를 몰라도 resolve_within 이 구조적으로
-    탈출을 막으므로 이건 구멍을 막는 게 아니라 일관성을 맞추는 것이다.
+    두 형태(`root`, `root.resolve()`) 를 모두 지운다 — macOS 는 `/var` 가
+    `/private/var` 심볼릭 링크라서 base 가 심볼릭 링크 아래 있으면 둘이
+    달라진다. 절대경로가 그대로 섞여 나가면 list_files 가 지키는 "루트를
+    드러내지 않는다" 불변식이 에러/출력 경로로 새는 우회로가 된다. 루트를
+    몰라도 resolve_within 이 구조적으로 탈출을 막으므로 이건 구멍을 막는 게
+    아니라 일관성을 맞추는 것이다.
+
+    `root/` 접두사는 통째로 지워 `root/foo.py` 를 `foo.py` 로 만든다 — 이는
+    모델이 write_file 에 넘긴 상대경로와 같은 모양이라 오해를 주지 않는다.
+    접두사가 아니라 통째로 root 와 일치하는 경우만 "." 로 남긴다.
     """
-    text = str(exc)
     for candidate in {str(root), str(root.resolve())}:
         if not candidate:
             continue
         text = text.replace(candidate + "/", "").replace(candidate, ".")
     return text
+
+
+def _os_error_detail(root: Path, exc: OSError) -> str:
+    """OSError 메시지에서 워크스페이스 루트의 절대경로를 지운다.
+
+    errno 범주(예: "Permission denied")는 모델에게 유용하니 남긴다.
+    """
+    return _strip_root(root, str(exc))
 
 
 def list_files(root: Path) -> ToolResult:
@@ -140,7 +153,9 @@ def _run(root: Path, argv: list[str]) -> ToolResult:
                 f"{_os_error_detail(root, exc)}"
             ),
         )
-    detail = _tail(proc.stdout) + ("\n--- stderr ---\n" + _tail(proc.stderr) if proc.stderr else "")
+    stdout = _strip_root(root, proc.stdout)
+    stderr = _strip_root(root, proc.stderr)
+    detail = _tail(stdout) + ("\n--- stderr ---\n" + _tail(stderr) if stderr else "")
     return ToolResult(ok=proc.returncode == 0, detail=detail, exit_code=proc.returncode)
 
 
