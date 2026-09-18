@@ -42,6 +42,7 @@ from tests.integration.harness import (
 ALL_PASS = "scenarios/all_pass.yaml"
 ALL_PASS_SLOW = "scenarios/all_pass_slow.yaml"
 QA_FAILS_TWICE = "scenarios/qa_fails_twice.yaml"
+VERDICTS_FAIL_TWICE = "scenarios/verdicts_fail_twice.yaml"
 
 RECOVERY_TIMEOUT_S = 90.0
 
@@ -334,13 +335,23 @@ async def test_orchestrator_sigkill_mid_run_still_completes(point, predicate) ->
 
     에이전트 4종은 계속 살아 있다(`depends_on`은 런타임 연결이 아니다). 죽어 있는
     동안 도착한 푸시는 전부 유실되므로, 복구는 전적으로 리컨실러의 관찰에 달려 있다.
+
+    `verdicts_fail_twice`를 쓴다 — `qa_fails_twice`가 아니다. 그쪽의
+    `dev: attempt_2: crash`는 **스텁의 호출 순번**에 걸려 있어서, SIGKILL이
+    유발한 재전송이 dev 를 한 번 더 부르면 그 2회차가 재시도 자리에 떨어진다.
+    그러면 dev 는 transport(1회차 유실) → execution(2회차 크래시)로 연달아 실패하고
+    `max_attempts(execution)=2`가 소진돼 정당하게 escalate 한다 — 복구 결함이 아니라
+    **두 고장 주입이 같은 재시도 예산을 나눠 쓴 것**이다(실측). 이 테스트의 관심사는
+    오케스트레이터 크래시 복구 하나뿐이므로 에이전트 크래시는 빼고, verdict 순서만
+    같은 시나리오로 동일한 환류 2회를 만든다. 에이전트 크래시 재시도는
+    `test_dev_crash_on_second_attempt_is_retried_and_recovers`가 따로 덮는다.
     """
     rid = f"REQ-04-{point}"
     # 관찰을 시작하기 전에 지난 실행의 행을 지운다. run_scenario도 시작하며 지우지만
     # 그 삭제와 이 테스트의 첫 폴링은 경합한다 — 지난 실행(이미 accepted)을 이번
     # 실행으로 착각하면 kill이 허공에 떨어진다(실측).
     await purge(rid)
-    run = asyncio.create_task(run_scenario(QA_FAILS_TWICE, rid, "회원가입"))
+    run = asyncio.create_task(run_scenario(VERDICTS_FAIL_TWICE, rid, "회원가입"))
     try:
         at_kill = await wait_for(
             rid, predicate, timeout_s=60.0, what=f"kill 지점 {point}"
