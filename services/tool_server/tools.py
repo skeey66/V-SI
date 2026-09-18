@@ -35,6 +35,22 @@ def _tail(text: str, limit: int = OUTPUT_TAIL_BYTES) -> str:
     return "...(앞부분 절단)...\n" + raw[-limit:].decode("utf-8", errors="replace")
 
 
+def _os_error_detail(root: Path, exc: OSError) -> str:
+    """OSError 메시지에서 워크스페이스 루트의 절대경로를 지운다.
+
+    errno 범주(예: "Permission denied")는 모델에게 유용하니 남기지만, 절대경로가
+    그대로 섞여 나가면 list_files 가 지키는 "루트를 드러내지 않는다" 불변식이
+    에러 경로로 새는 우회로가 된다. 루트를 몰라도 resolve_within 이 구조적으로
+    탈출을 막으므로 이건 구멍을 막는 게 아니라 일관성을 맞추는 것이다.
+    """
+    text = str(exc)
+    for candidate in {str(root), str(root.resolve())}:
+        if not candidate:
+            continue
+        text = text.replace(candidate + "/", "").replace(candidate, ".")
+    return text
+
+
 def list_files(root: Path) -> ToolResult:
     names = sorted(
         str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()
@@ -52,9 +68,13 @@ def read_file(root: Path, path: str) -> ToolResult:
     try:
         raw = target.read_bytes()
     except PermissionError as exc:
-        return ToolResult(ok=False, detail=f"{path} 을 읽을 권한이 없다: {exc}")
+        return ToolResult(
+            ok=False, detail=f"{path} 을 읽을 권한이 없다: {_os_error_detail(root, exc)}"
+        )
     except OSError as exc:
-        return ToolResult(ok=False, detail=f"{path} 을 읽는 중 오류가 났다: {exc}")
+        return ToolResult(
+            ok=False, detail=f"{path} 을 읽는 중 오류가 났다: {_os_error_detail(root, exc)}"
+        )
     if len(raw) > READ_LIMIT_BYTES:
         body = raw[:READ_LIMIT_BYTES].decode("utf-8", errors="replace")
         return ToolResult(ok=True, detail=body + "\n...(뒷부분 절단)...")
@@ -72,15 +92,28 @@ def write_file(root: Path, path: str, content: str) -> ToolResult:
     except IsADirectoryError as exc:
         return ToolResult(
             ok=False,
-            detail=f"{path} 은 이미 디렉터리라서 파일로 쓸 수 없다: {exc}",
+            detail=f"{path} 은 이미 디렉터리라서 파일로 쓸 수 없다: {_os_error_detail(root, exc)}",
         )
     except (FileExistsError, NotADirectoryError) as exc:
         return ToolResult(
             ok=False,
-            detail=f"{path} 의 상위 경로에 이미 파일이 있어 디렉터리를 만들 수 없다: {exc}",
+            detail=(
+                f"{path} 의 상위 경로에 이미 파일이 있어 디렉터리를 만들 수 없다: "
+                f"{_os_error_detail(root, exc)}"
+            ),
+        )
+    except UnicodeEncodeError as exc:
+        return ToolResult(
+            ok=False,
+            detail=(
+                f"{path} 에 쓸 내용에 UTF-8 로 인코딩할 수 없는 문자가 있다"
+                f"(깨진 대리쌍 등): {exc}"
+            ),
         )
     except OSError as exc:
-        return ToolResult(ok=False, detail=f"{path} 에 쓰는 중 오류가 났다: {exc}")
+        return ToolResult(
+            ok=False, detail=f"{path} 에 쓰는 중 오류가 났다: {_os_error_detail(root, exc)}"
+        )
     return ToolResult(ok=True, detail=f"{path} 에 {len(content)} 자를 썼다")
 
 
@@ -102,7 +135,10 @@ def _run(root: Path, argv: list[str]) -> ToolResult:
     except OSError as exc:
         return ToolResult(
             ok=False,
-            detail=f"실행하지 못했다 (작업 디렉터리나 인터프리터를 확인하라): {exc}",
+            detail=(
+                "실행하지 못했다 (작업 디렉터리나 인터프리터를 확인하라): "
+                f"{_os_error_detail(root, exc)}"
+            ),
         )
     detail = _tail(proc.stdout) + ("\n--- stderr ---\n" + _tail(proc.stderr) if proc.stderr else "")
     return ToolResult(ok=proc.returncode == 0, detail=detail, exit_code=proc.returncode)
