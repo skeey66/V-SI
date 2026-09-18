@@ -1,0 +1,15 @@
+# all_pass와 같은 결과를 내되 각 단계가 느리다.
+#
+# 용도는 하나다: SIGKILL이 **실행 도중에** 떨어지도록 창을 넓힌다. 지연이 없는
+# all_pass는 1초 안에 끝나 kill이 종료 뒤에 도착하는 일이 생기고, 그러면 테스트가
+# 아무것도 시험하지 않으면서 통과한다(실측).
+#
+# 결과가 스텁의 호출 순번에 의존하지 않는다는 성질은 all_pass 그대로다 —
+# 복구가 에이전트를 한 번 더 부르더라도 최종 상태가 달라지지 않으므로
+# "중단 없는 실행과 동일한가" 비교의 기준으로 쓸 수 있다.
+scenario: all_pass_slow
+agents:
+  planner:  { verdicts: [], latency_ms: 1500 }
+  dev:      { verdicts: [], latency_ms: 1500 }
+  qa:       { verdicts: [PASS], latency_ms: 1500 }
+  security: { verdicts: [PASS], latency_ms: 1500 }

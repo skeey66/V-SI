@@ -1,0 +1,66 @@
+name: ci
+on: [push, pull_request]
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    # tests/orchestrator는 tests/conftest.py의 `session` 픽스처를 쓴다 — 매
+    # 테스트마다 실제 postgres에 drop_all/create_all을 한다(단위 시험이지만
+    # DB 자체는 진짜다). tests/agent_runtime·tests/stub_agent는 DB가 필요 없다.
+    # 브리프 원안은 이 job에 DB를 붙이지 않아 tests/orchestrator가 전부
+    # 연결 실패로 죽었을 것이다 — 컴포즈 전체를 띄우는 대신 가벼운 서비스
+    # 컨테이너 하나로 postgres만 붙인다.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: vsi
+          POSTGRES_PASSWORD: vsi
+          POSTGRES_DB: vsi
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U vsi"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/orchestrator tests/agent_runtime tests/stub_agent -v
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -e ".[dev]"
+      - run: docker compose up -d --build
+      # tests/services는 실행 중인 컴포즈 스택의 postgres(호스트 55432)만
+      # 있으면 된다 — 에이전트 컨테이너 없이도 이벤트 게이트웨이의 순수 폴링
+      # 로직을 직접 부른다. 브리프 원안은 이 디렉터리를 어느 job에도 배정하지
+      # 않아 120개 중 2개(커서 복구 회귀 시험 포함)가 CI에서 전혀 안 돌
+      # 뻔했다 — 여기서 함께 돌린다.
+      - run: pytest tests/integration tests/services -v
+      - if: always()
+        run: docker compose logs --no-color > compose.log
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: compose-logs, path: compose.log }
+
+  web:
+    runs-on: ubuntu-latest
+    # Task 16의 그래프(vitest 7개)는 파이썬 스택과 독립이라 별도 job으로 돈다.
+    # node:20-alpine을 쓰는 것은 로컬 컴포즈의 web 서비스뿐이다(레지스트리
+    # 프록시 회피용, docker-compose.yml 참고) — 이 job은 도커를 전혀 쓰지
+    # 않고 setup-node로 러너에 직접 Node를 깔므로 그 프록시 문제와 무관하다.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: npm ci
+        working-directory: web
+      - run: npm test
+        working-directory: web
