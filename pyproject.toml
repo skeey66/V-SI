@@ -14,6 +14,7 @@ dependencies = [
   "opentelemetry-instrumentation-fastapi",
   "opentelemetry-instrumentation-httpx",
   "opentelemetry-exporter-otlp",
+  "bandit>=1.7.0",
 ]
 
 [project.optional-dependencies]
