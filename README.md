@@ -91,7 +91,7 @@ CI는 세 job으로 나뉘어 있다 — `unit`(postgres 서비스 컨테이너)
 
 ## 문서
 
-- [SP1 A2A 커널 설계](docs/superpowers/specs/2026-09-17-a2a-kernel-design.md)
+- [SP1 A2A 커널 설계](docs/specs/2026-09-17-a2a-kernel-design.md)
 - [설계 화면](docs/design-screens/) — 아키텍처·컴포넌트 경계·상태 모델 다이어그램 (브라우저에서 열람)
 
 ## 기술 스택
