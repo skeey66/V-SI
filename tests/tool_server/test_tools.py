@@ -145,3 +145,13 @@ def test_write_file_with_lone_surrogate_is_error_result_not_exception(tmp_path: 
     """Ollama 가 JSON 으로 돌려주는 도구 인자에 깨진 대리쌍이 섞일 수 있다."""
     result = write_file(tmp_path, "bad.py", "x = '\ud800'")
     assert not result.ok
+
+
+def test_run_tests_collection_error_does_not_leak_workspace_root(tmp_path: Path) -> None:
+    """pytest 의 assertion-rewrite 는 ast.parse(filename=<절대경로>) 를 쓰므로
+    수집 오류 출력에 절대경로가 그대로 찍힌다 — cwd 를 워크스페이스로 잡아도 샌다."""
+    write_file(tmp_path, "test_broken.py", "def test_x(\n")  # 문법 오류
+    result = run_tests(tmp_path)
+    assert not result.ok
+    assert str(tmp_path) not in result.detail
+    assert str(tmp_path.resolve()) not in result.detail
