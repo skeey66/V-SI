@@ -49,7 +49,12 @@ def read_file(root: Path, path: str) -> ToolResult:
         return ToolResult(ok=False, detail=str(exc))
     if not target.is_file():
         return ToolResult(ok=False, detail=f"파일이 없다: {path}")
-    raw = target.read_bytes()
+    try:
+        raw = target.read_bytes()
+    except PermissionError as exc:
+        return ToolResult(ok=False, detail=f"{path} 을 읽을 권한이 없다: {exc}")
+    except OSError as exc:
+        return ToolResult(ok=False, detail=f"{path} 을 읽는 중 오류가 났다: {exc}")
     if len(raw) > READ_LIMIT_BYTES:
         body = raw[:READ_LIMIT_BYTES].decode("utf-8", errors="replace")
         return ToolResult(ok=True, detail=body + "\n...(뒷부분 절단)...")
@@ -61,8 +66,21 @@ def write_file(root: Path, path: str, content: str) -> ToolResult:
         target = resolve_within(root, path)
     except PathEscape as exc:
         return ToolResult(ok=False, detail=str(exc))
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content, encoding="utf-8")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    except IsADirectoryError as exc:
+        return ToolResult(
+            ok=False,
+            detail=f"{path} 은 이미 디렉터리라서 파일로 쓸 수 없다: {exc}",
+        )
+    except (FileExistsError, NotADirectoryError) as exc:
+        return ToolResult(
+            ok=False,
+            detail=f"{path} 의 상위 경로에 이미 파일이 있어 디렉터리를 만들 수 없다: {exc}",
+        )
+    except OSError as exc:
+        return ToolResult(ok=False, detail=f"{path} 에 쓰는 중 오류가 났다: {exc}")
     return ToolResult(ok=True, detail=f"{path} 에 {len(content)} 자를 썼다")
 
 
@@ -80,6 +98,11 @@ def _run(root: Path, argv: list[str]) -> ToolResult:
             ok=False,
             detail=f"{SUBPROCESS_TIMEOUT_S}초 안에 끝나지 않아 중단했다",
             exit_code=124,
+        )
+    except OSError as exc:
+        return ToolResult(
+            ok=False,
+            detail=f"실행하지 못했다 (작업 디렉터리나 인터프리터를 확인하라): {exc}",
         )
     detail = _tail(proc.stdout) + ("\n--- stderr ---\n" + _tail(proc.stderr) if proc.stderr else "")
     return ToolResult(ok=proc.returncode == 0, detail=detail, exit_code=proc.returncode)
