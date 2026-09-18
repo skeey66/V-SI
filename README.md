@@ -2,8 +2,8 @@
 
 기획·개발·QA·보안 역할의 AI 에이전트가 A2A 프로토콜 위에서 협업해 소프트웨어를 만드는 시스템.
 
-원 과제: 초기 요구 정의.
-본 프로젝트는 그 초기 요구 정의를 참조 규격으로 삼되 **포트폴리오 목적**으로 범위를 재구성했다.
+소프트웨어 회사의 역할 분업을 그대로 프로세스 경계로 옮기면 어떤 인프라가 필요한지
+직접 만들어 확인하는 프로젝트다.
 
 **증명 대상: 에이전트 인프라 · 분산 시스템 설계.**
 
@@ -38,9 +38,9 @@ LLM을 한 번도 호출하지 않고 오케스트레이션 전 구간이 동작
 ## 실행
 
 ```bash
-cp .env.example .env # VSI_PUSH_TOKEN (개발 전용 고정값)
-docker compose up -d --build # 9개 서비스
-./scripts/demo.sh # 스택 기동 + 요구사항 1건을 accepted까지 완주
+cp .env.example .env          # VSI_PUSH_TOKEN (개발 전용 고정값)
+docker compose up -d --build  # 9개 서비스
+./scripts/demo.sh             # 스택 기동 + 요구사항 1건을 accepted까지 완주
 ```
 
 `scripts/demo.sh`는 `qa_fails_twice` 시나리오로 `REQ-DEMO` 하나를 돌린다 — qa가 두 번,
@@ -62,7 +62,7 @@ A2A 카드는 `/.well-known/agent-card.json`에서 직접 볼 수 있다.
 
 ```bash
 curl -X POST localhost:8000/requirements -H 'content-type: application/json' \
- -d '{"requirement_id":"REQ-001","title":"회원가입","run_id":"run-1"}'
+  -d '{"requirement_id":"REQ-001","title":"회원가입","run_id":"run-1"}'
 curl localhost:8000/requirements/REQ-001
 ```
 
@@ -71,7 +71,7 @@ curl localhost:8000/requirements/REQ-001
 
 ```bash
 VSI_SCENARIO=scenarios/all_pass.yaml docker compose up -d --force-recreate \
- --no-deps planner dev qa security
+  --no-deps planner dev qa security
 ```
 
 ## 테스트
@@ -80,9 +80,9 @@ VSI_SCENARIO=scenarios/all_pass.yaml docker compose up -d --force-recreate \
 
 ```bash
 pip install -e ".[dev]"
-pytest tests # 단위 + 통합 + 수용 (스택 기동 필요, 약 4분)
-pytest tests/orchestrator tests/agent_runtime tests/stub_agent # 스택 없이 (postgres만 필요)
-cd web && npm ci && npm test # vitest — 그래프 리듀서
+pytest tests                       # 단위 + 통합 + 수용 (스택 기동 필요, 약 4분)
+pytest tests/orchestrator tests/agent_runtime tests/stub_agent  # 스택 없이 (postgres만 필요)
+cd web && npm ci && npm test       # vitest — 그래프 리듀서
 ```
 
 `tests/orchestrator`는 "단위"지만 진짜 postgres에 붙는다(매 시험마다 스키마를 비운다).
