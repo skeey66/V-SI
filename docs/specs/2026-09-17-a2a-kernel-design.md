@@ -1,15 +1,14 @@
 # V-SI · SP1 A2A 커널 설계
 
 작성일: 2026-09-17
-상태: 승인 대기
+상태: **구현 완료** (2026-09-18). 이 문서는 구현된 그대로를 기술한다 — 구현 중 뒤집힌 판단은 본문에 반영했고, SP2로 넘기는 제약은 §12에 모았다.
 범위: SP1 (A2A 커널). SP2·SP3는 별도 스펙.
 
 ## 1. 배경과 목표
 
 V-SI는 기획·개발·QA·보안 역할의 AI 에이전트가 협업해 소프트웨어를 만드는 "가상 SI 회사"다.
-원 과제는 초기 요구 정의이며, 본 프로젝트는
-그 초기 요구 정의를 참조 규격으로 삼되 **포트폴리오 목적**으로 수행한다. 따라서 초기 요구 정의의 8개 목표를
-전부 따르지 않고, 증명하려는 역량에 맞춰 범위를 재구성한다.
+소프트웨어 회사의 역할 분업을 그대로 프로세스 경계로 옮겼을 때 무엇이 필요해지는지가
+이 프로젝트의 질문이다. 기능을 넓히기보다 그 질문에 답하는 데 필요한 범위로 좁힌다.
 
 **증명 대상: 에이전트 인프라 · 분산 시스템 설계.**
 에이전트의 프롬프트 품질이나 생성 코드의 우수성이 아니라, 여러 자율 프로세스가 프로토콜 위에서
@@ -44,18 +43,16 @@ LLM을 전혀 호출하지 않고 오케스트레이션 전 구간이 동작하�
 
 ## 3. 기술 스택
 
-초기 요구 정의 "구현 요건 · 권장 기술"을 따른다.
-
-| 항목 | 선택 | 초기 요구 정의 |
+| 항목 | 선택 | 이유 |
 |---|---|---|
-| 언어 | Python 3.11 | Python 3.10 이상 ✓ |
-| API 서버 | FastAPI | FastAPI ✓ |
-| 에이전트 통신 | `a2a-sdk` **1.1.2** (A2A 스펙 1.0), HTTP+JSON 바인딩 | A2A Python SDK 1.0 ✓ |
-| 상태 관리 | PostgreSQL (`DatabaseTaskStore`, SQLAlchemy async) | SQLite 또는 PostgreSQL ✓ |
-| 관측성 | OpenTelemetry → Jaeger | OpenTelemetry ✓ |
-| 대시보드 | React (실시간 그래프) | React 또는 Streamlit ✓ |
-| 단위 테스트 | pytest | pytest ✓ |
-| 컨테이너 | Docker / docker compose | Docker ✓ |
+| 언어 | Python 3.11 | `a2a-sdk` 의 1차 지원 언어 |
+| API 서버 | FastAPI | SDK 가 ASGI 앱을 그대로 내주고 OTel 계측이 붙는다 |
+| 에이전트 통신 | `a2a-sdk` **1.1.2** (A2A 스펙 1.0), HTTP+JSON 바인딩 | gRPC 보다 디버깅이 쉽고 curl 로 재현 가능 |
+| 상태 관리 | PostgreSQL (`DatabaseTaskStore`, SQLAlchemy async) | 아웃박스가 `FOR UPDATE` 와 트랜잭션을 요구한다 |
+| 관측성 | OpenTelemetry → Jaeger | 서비스 5개를 한 트레이스로 잇는 게 완료 기준 |
+| 대시보드 | React (실시간 그래프) | 동시성을 보이려면 그래프가 필요하다 |
+| 단위 테스트 | pytest | async 테스트와 컨테이너 픽스처 |
+| 컨테이너 | Docker / docker compose | 프로세스 분리가 이 설계의 전제다 |
 
 `a2a-sdk[fastapi,http-server,telemetry,postgresql]` extras를 사용한다.
 
@@ -68,9 +65,9 @@ LLM을 전혀 호출하지 않고 오케스트레이션 전 구간이 동작하�
 
 SP2에서 추가: MCP Python SDK, Ruff, mypy, Bandit, Semgrep, Playwright.
 
-### 초기 요구 정의에 없는 설계 판단
+### A2A 스펙이 정하지 않는 설계 판단
 
-**트랜잭셔널 아웃박스와 Event Gateway는 초기 요구 정의에 없는 본 설계의 추가다.**
+**트랜잭셔널 아웃박스와 Event Gateway 는 A2A 스펙 밖의 추가다.**
 실시간 그래프 UI(시각화 B)에 이벤트를 공급해야 하는데, 상태 전이와 이벤트 발행을 분리하면
 "상태는 바뀌었는데 이벤트는 유실" 상태가 생긴다. 두 쓰기를 한 트랜잭션에 넣으면 이 창이
 구조적으로 닫힌다. UI 편의가 아니라 정합성을 위한 선택이다.
@@ -81,31 +78,31 @@ docker compose로 10개 서비스를 띄운다 — `orchestrator`, `planner`, `d
 `postgres`, `event-gateway`, `web`(React), `otel-collector`, `jaeger`.
 
 ```
-[React Graph UI] [Jaeger UI]
- │ WebSocket │
-[Event Gateway] [OTel Collector] ←╌╌ 전 서비스 계측
- │ outbox tail ↑
- └──────────┐ ╎
- [Orchestrator] ╌╌╌╌╌╌┘
- │ A2A · HTTP+JSON · push callback
- ┌────────┬───┴────┬────────┐
- [planner] [dev] [qa] [security] :8001~:8004
- └────────┴────────┴────────┘
- │
- [PostgreSQL]
- workflow_* · artifacts · events(outbox) · agent_registry
+[React Graph UI]            [Jaeger UI]
+       │ WebSocket               │
+[Event Gateway]           [OTel Collector] ←╌╌ 전 서비스 계측
+       │ outbox tail             ↑
+       └──────────┐              ╎
+            [Orchestrator] ╌╌╌╌╌╌┘
+                  │ A2A · HTTP+JSON · push callback
+     ┌────────┬───┴────┬────────┐
+  [planner] [dev]    [qa]  [security]     :8001~:8004
+     └────────┴────────┴────────┘
+                  │
+            [PostgreSQL]
+   workflow_* · artifacts · events(outbox) · agent_registry
 ```
 
 ### 결정과 근거
 
 **허브-스포크.** 에이전트끼리 직접 호출하지 않고 전부 오케스트레이터를 경유한다. A2A 스펙은
-메시 통신도 허용하지만, 초기 요구 정의가 요구한 "작업 소유권과 결과물 버전 관리"는 조정자가 한 곳일 때만
+메시 통신도 허용하지만, 작업 소유권과 결과물 버전 관리는 조정자가 한 곳일 때만
 성립한다. 재시도 권한도 오케스트레이터만 갖는다.
 
 **Event Gateway 분리.** 오케스트레이터에 WebSocket을 붙이지 않는다. UI가 죽거나 소켓이 밀려도
 워크플로가 영향받지 않아야 한다.
 
-**HTTP+JSON.** 초기 요구 정의 권장이며 curl로 재현 가능해 디버깅이 쉽다.
+**HTTP+JSON.** curl 로 재현 가능해 디버깅이 쉽다.
 
 **메시지 브로커 없음.** 아웃박스 테일링으로 충분하다. Kafka/Redis를 넣으면 서비스가 늘고
 운영 복잡도만 증가한다.
@@ -142,16 +139,16 @@ SDK는 ASGI 애플리케이션을 만들어 주지 않고 **라우트를 우리 
 | Outbox Writer | 상태 전이와 `events` 행을 한 트랜잭션에 기록 |
 | Reconciler | 주기 실행. 워크플로 상태와 실제 Task 상태를 대조해 수렴 |
 
-초기 요구 정의 지침대로 오케스트레이터는 LLM이 아니다. 작업 순서·반복 횟수·승인 조건 같은 확정적 규칙은
+오케스트레이터는 LLM 이 아니다. 작업 순서·반복 횟수·승인 조건 같은 확정적 규칙은
 일반 프로그램 코드로 구현한다.
 
 ### 경계 검증
 
 - 에이전트는 다른 에이전트를 모른다. 입력 Artifact만 받고 출력 Artifact만 낸다.
- → SP2에서 스텁을 LLM로 교체해도 오케스트레이터는 변경 없음.
+  → SP2에서 스텁을 LLM로 교체해도 오케스트레이터는 변경 없음.
 - 오케스트레이터는 Task 내부 상태를 모른다. push로 받는 완료/실패 통지만 본다.
 - Artifact 테이블은 오케스트레이터 소유이고 SDK의 Task 테이블과 스키마가 분리된다.
- → 아웃박스를 같은 트랜잭션에 묶을 수 있다.
+  → 아웃박스를 같은 트랜잭션에 묶을 수 있다.
 
 ## 6. 데이터 모델
 
@@ -164,69 +161,69 @@ SDK가 자체 Task 테이블(`tasks`, `push_notification_configs`)을 소유한�
 ```sql
 -- 요구사항 단위 워크플로 상태
 CREATE TABLE workflow_requirements (
- requirement_id TEXT PRIMARY KEY, -- REQ-001
- title TEXT NOT NULL,
- state TEXT NOT NULL, -- planned|implementing|verifying|
- -- remediating|blocked|accepted|escalated
- revision INT NOT NULL DEFAULT 1,
- max_revisions INT NOT NULL DEFAULT 3,
- run_id UUID NOT NULL,
- created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
- updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  requirement_id  TEXT PRIMARY KEY,           -- REQ-001
+  title           TEXT NOT NULL,
+  state           TEXT NOT NULL,              -- planned|implementing|verifying|
+                                              -- remediating|blocked|accepted|escalated
+  revision        INT  NOT NULL DEFAULT 1,
+  max_revisions   INT  NOT NULL DEFAULT 3,
+  run_id          UUID NOT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- 에이전트 1회 실행 = 1행. 불변.
 CREATE TABLE workflow_tasks (
- task_id UUID PRIMARY KEY,
- requirement_id TEXT NOT NULL REFERENCES workflow_requirements,
- agent TEXT NOT NULL, -- planner|dev|qa|security
- revision INT NOT NULL, -- 소속 요구사항의 환류 회차.
- -- 같은 회차의 dev/qa/security가 동일 값을 공유한다.
- a2a_task_id TEXT, -- SDK가 발급
- idempotency_key TEXT NOT NULL,
- state TEXT NOT NULL, -- submitted|working|completed|failed|canceled
- verdict TEXT, -- PASS|FAIL (qa/security만)
- failure_class TEXT, -- transport|execution|poison
- attempt INT NOT NULL DEFAULT 1,
- revision_of UUID REFERENCES workflow_tasks,
- created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
- completed_at TIMESTAMPTZ,
- UNIQUE (idempotency_key)
+  task_id          UUID PRIMARY KEY,
+  requirement_id   TEXT NOT NULL REFERENCES workflow_requirements,
+  agent            TEXT NOT NULL,             -- planner|dev|qa|security
+  revision         INT  NOT NULL,             -- 소속 요구사항의 환류 회차.
+                                              -- 같은 회차의 dev/qa/security가 동일 값을 공유한다.
+  a2a_task_id      TEXT,                      -- SDK가 발급
+  idempotency_key  TEXT NOT NULL,
+  state            TEXT NOT NULL,             -- submitted|working|completed|failed|canceled
+  verdict          TEXT,                      -- PASS|FAIL  (qa/security만)
+  failure_class    TEXT,                      -- transport|execution|poison
+  attempt          INT  NOT NULL DEFAULT 1,
+  revision_of      UUID REFERENCES workflow_tasks,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at     TIMESTAMPTZ,
+  UNIQUE (idempotency_key)
 );
 CREATE INDEX ON workflow_tasks (requirement_id, revision);
 CREATE INDEX ON workflow_tasks (state) WHERE state IN ('submitted','working');
 
 CREATE TABLE artifacts (
- artifact_id UUID PRIMARY KEY,
- requirement_id TEXT NOT NULL REFERENCES workflow_requirements,
- producer_task UUID NOT NULL REFERENCES workflow_tasks,
- kind TEXT NOT NULL, -- requirements|source_code|
- -- test_report|security_report
- version INT NOT NULL,
- content JSONB NOT NULL,
- sha256 TEXT NOT NULL,
- created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
- UNIQUE (requirement_id, kind, version)
+  artifact_id     UUID PRIMARY KEY,
+  requirement_id  TEXT NOT NULL REFERENCES workflow_requirements,
+  producer_task   UUID NOT NULL REFERENCES workflow_tasks,
+  kind            TEXT NOT NULL,              -- requirements|source_code|
+                                              -- test_report|security_report
+  version         INT  NOT NULL,
+  content         JSONB NOT NULL,
+  sha256          TEXT NOT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (requirement_id, kind, version)
 );
 
 -- 트랜잭셔널 아웃박스
 CREATE TABLE events (
- event_id BIGSERIAL PRIMARY KEY,
- occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
- aggregate TEXT NOT NULL, -- requirement|task
- aggregate_id TEXT NOT NULL,
- event_type TEXT NOT NULL,
- payload JSONB NOT NULL,
- published_at TIMESTAMPTZ -- NULL = 미발행
+  event_id      BIGSERIAL PRIMARY KEY,
+  occurred_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  aggregate     TEXT NOT NULL,                -- requirement|task
+  aggregate_id  TEXT NOT NULL,
+  event_type    TEXT NOT NULL,
+  payload       JSONB NOT NULL,
+  published_at  TIMESTAMPTZ                   -- NULL = 미발행
 );
 CREATE INDEX ON events (event_id) WHERE published_at IS NULL;
 
 CREATE TABLE agent_registry (
- agent TEXT PRIMARY KEY,
- base_url TEXT NOT NULL,
- card JSONB NOT NULL,
- healthy BOOLEAN NOT NULL DEFAULT false,
- last_seen_at TIMESTAMPTZ
+  agent         TEXT PRIMARY KEY,
+  base_url      TEXT NOT NULL,
+  card          JSONB NOT NULL,
+  healthy       BOOLEAN NOT NULL DEFAULT false,
+  last_seen_at  TIMESTAMPTZ
 );
 ```
 
@@ -240,22 +237,22 @@ A2A에서 종료 상태는 되돌릴 수 없으므로, `completed`된 dev Task�
 
 ```
 submitted → working → completed | failed | canceled
- ↕
- input-required ← 사람 승인 대기 전용
+              ↕
+        input-required        ← 사람 승인 대기 전용
 ```
 
-`input-required`는 **재작업에 쓰지 않는다.** 초기 요구 정의 안전성 요구("배포, 결제, 개인정보 전송은
+`input-required`는 **재작업에 쓰지 않는다.** 안전성 요구("배포, 결제, 개인정보 전송은
 사람의 승인을 요구한다")가 A2A의 `input-required` 의미와 정확히 일치하므로 이 용도로 예약한다.
 
 ### 층 2 — 워크플로 (우리 소관, 요구사항마다)
 
 ```
 planned → implementing → verifying ─(통과)→ accepted
- ↑ │
- │ (결함)
- │ ↓
- └── remediating ─(반복 상한 초과)→ escalated
- implementing ↔ blocked (승인 게이트)
+              ↑              │
+              │           (결함)
+              │              ↓
+              └── remediating ─(반복 상한 초과)→ escalated
+        implementing ↔ blocked  (승인 게이트)
 ```
 
 ### Task 불변성과 계보
@@ -263,13 +260,13 @@ planned → implementing → verifying ─(통과)→ accepted
 시도마다 새 Task를 만들고 `revision_of`로 계보만 잇는다. 실패한 시도를 지우지 않는다.
 
 ```
-REQ-001 회원가입 workflow: accepted · revisions=2
-├─ task/dev/8f1a rev 1 → completed artifact: source_code@v1
-├─ task/qa/3c02 → completed verdict: FAIL 중복 가입 미처리
-├─ task/sec/9d77 → completed verdict: FAIL 평문 비밀번호 저장
-├─ task/dev/b204 rev 2 revision_of: 8f1a → completed source_code@v2
-├─ task/qa/f5e1 → completed verdict: PASS
-└─ task/sec/1a93 → completed verdict: PASS
+REQ-001 회원가입   workflow: accepted · revisions=2
+├─ task/dev/8f1a  rev 1 → completed   artifact: source_code@v1
+├─ task/qa/3c02         → completed   verdict: FAIL  중복 가입 미처리
+├─ task/sec/9d77        → completed   verdict: FAIL  평문 비밀번호 저장
+├─ task/dev/b204  rev 2  revision_of: 8f1a → completed   source_code@v2
+├─ task/qa/f5e1         → completed   verdict: PASS
+└─ task/sec/1a93        → completed   verdict: PASS
 ```
 
 얻는 것:
@@ -281,7 +278,7 @@ REQ-001 회원가입 workflow: accepted · revisions=2
 감수하는 것:
 - Task 행 증가 (수렴까지 요구사항당 6~10행). 인덱스로 대응.
 - SP2에서 dev 에이전트가 이전 시도 맥락을 자동으로 갖지 못한다. 이전 코드와 리포트를
- 입력 Artifact로 명시 전달해야 한다. 토큰이 더 들지만 사용량이 명시적으로 드러나 측정이 정직해진다.
+  입력 Artifact로 명시 전달해야 한다. 토큰이 더 들지만 사용량이 명시적으로 드러나 측정이 정직해진다.
 
 ## 8. 실패 처리
 
@@ -300,27 +297,66 @@ REQ-001 회원가입 workflow: accepted · revisions=2
 
 ### 멱등성
 
-A2A Task가 `failed`면 종료 상태이므로 재시도는 새 Task 발행이다. 중복 실행을 막기 위해:
+A2A Task가 `failed`면 종료 상태이므로 재시도는 새 Task 발행이다. 그 새 발행들이 서로 구분되고
+계보가 남게 하는 것이 멱등성 키다.
 
 ```
-idempotency_key = sha256(requirement_id | agent | revision | input_artifact_hashes)
+idempotency_key = sha256(requirement_id | agent | revision | attempt)
 ```
 
-오케스트레이터가 생성해 A2A 메시지 메타데이터로 전달한다. 에이전트는 같은 키로 완료된 Task가
-있으면 재실행하지 않고 기존 Artifact를 반환한다. `revision`이 키에 포함되므로 환류로 인한
-정당한 재실행은 다른 키가 되어 정상 진행된다.
+필드 경계는 길이 접두사로 인코딩해 구분자 주입을 막는다. `attempt`는 1일 때 재료에서 빠지므로
+첫 시도의 키는 이 필드가 생기기 전과 같은 값이다.
+
+**이 키가 실제로 하는 일은 두 가지다.**
+
+1. **`workflow_tasks`의 유니크 태그.** 열에 유니크 제약이 걸려 있어, 같은 (요구사항, 에이전트,
+   회차, 시도)에 대해 행이 두 개 생기는 것을 DB가 막는다. 동시에 디스패치하는 두 경로는 둘 다
+   `attempt = COUNT + 1`을 같은 값으로 계산하므로 같은 키를 만들고, 뒤늦은 쪽이 유니크 위반으로
+   떨어진다.
+2. **계보.** `revision`이 재료에 있으므로 환류로 인한 정당한 재실행은 자연히 다른 키가 되고,
+   `attempt`가 있으므로 크래시한 행을 대체하는 재디스패치도 다른 키가 된다 — Task 행은 불변이라
+   재시도가 기존 행을 고쳐 쓰는 대신 새 행을 만들어야 하는데, 회차만으로는 키가 충돌한다.
+
+키는 A2A 메시지 메타데이터(`vsi_idempotency_key`)로 에이전트에게도 전달된다. 다만 **에이전트는
+이 키로 중복을 제거하지 않는다.** SP1에서 그럴 필요가 없기 때문이다 — 아래 조건을 보라.
+
+> **SP2 경고 — 이 조건이 깨지면 에이전트측 멱등성이 필수가 된다.**
+>
+> 위 설계가 성립하는 근거는 하나뿐이다: **같은 키가 에이전트에 두 번 도달하는 경로가 없다.**
+> 그 자리 재시도(같은 행·같은 키로 다시 보내기)는 `retry.is_undelivered`가 참인 경우,
+> 즉 `ConnectError`/`ConnectTimeout`처럼 **요청이 상대에게 닿지 않았음이 증명된** 실패로만
+> 좁혀져 있다. 그 외의 모호한 실패(읽기 타임아웃, 5xx, `wait_for` 타임아웃)는 그 자리에서
+> 다시 보내지 않고 행을 실패로 확정하며, 리컨실러가 **새 `attempt` = 새 키**로 재디스패치한다.
+>
+> **그 자리 재시도의 범위를 "증명된 미전달" 밖으로 넓히는 순간 이 근거가 무너지고, 에이전트가
+> 키로 중복 실행을 걸러내는 일이 필수가 된다.** SP1에서 중복 디스패치의 비용은 스텁을 한 번 더
+> 부르는 것(0원)이지만, SP2에서는 **중복 LLM 과금**이다. 재시도 정책을 손보는 사람은 이 문단을
+> 먼저 읽어야 한다.
 
 ### 타임아웃 계층
 
-| 계층 | 기본값 |
-|---|---|
-| MCP 도구 실행 (SP2) | 30초 |
-| AgentExecutor 작업 | 5분 |
-| 워크플로 단계 | 15분 |
-| 실행(run) 전체 | 60분 |
+| 계층 | 설정 키 | 기본값 | SP1에서의 배선 |
+|---|---|---|---|
+| 도구 실행 (SP2의 MCP 도구) | `tool_s` | 30초 | **집행됨** — 에이전트로 나가는 왕복 하나를 `asyncio.wait_for`로 감싼다 (`engine.dispatch_agent`의 `submit`, `engine.refresh_task`의 `get_task`) |
+| AgentExecutor 작업 | `executor_s` | 5분 | **집행됨** — 공유 httpx 클라이언트의 요청당 타임아웃. `tool_s`가 먼저 끊으므로 실질적으로는 backstop |
+| 워크플로 단계 | `step_s` | 15분 | 배선 없음 |
+| 실행(run) 전체 | `run_s` | 60분 | 배선 없음 — **SP2 자리표시자** |
 
 **안쪽 < 바깥쪽 부등식을 설정 로딩 시점에 검증하고, 위반 시 기동을 실패시킨다.**
 바깥이 먼저 터지면 안쪽 실패 원인을 잃고 트레이스에 원인 없는 취소만 남는다.
+설정 값이 숫자가 아닌 경우도 같은 `TimeoutConfigError`로 보고한다 — `from_env`가
+`orchestrator/main.py`의 import 시점에 돌기 때문에, 맨 `ValueError`가 나가면
+컨테이너가 정체 불명의 예외로 죽는다.
+
+**부등식이 검증된다는 것과 네 층이 전부 집행된다는 것은 다르다.** `step_s`·`run_s`를
+배선하지 않은 것은 누락이 아니라 선택이다: SP1의 종료 보장은 시간 예산이 아니라
+**리컨실러의 관측**(열린 행 나이 천장 `stuck_after_s`, 실패 행 수 재시도 캡) 위에 서
+있고, 모든 요구사항이 종료 상태에 도달한다는 보장은 이미 그쪽에서 나온다. 같은 보장을
+시간 축에서 한 번 더 집행하면 두 기준이 서로 다른 순간에 발동해, 요구사항을 끝낸 것이
+어느 쪽인지 운영자가 구분할 수 없게 된다. SP2에서 실제 LLM 지연이 붙어 "느린 것"과
+"멈춘 것"을 나이만으로 가르기 어려워지면 그때 `run_s`를 리컨실러의 요구사항 나이
+backstop으로 배선한다(§12.2). 층별 현황은 `packages/orchestrator/policy.py`의 모듈
+docstring에도 같은 표로 있다.
 
 ### 크래시 복구
 
@@ -329,7 +365,7 @@ idempotency_key = sha256(requirement_id | agent | revision | input_artifact_hash
 응답이 없으면 새 Task를 발행한다.
 
 **오케스트레이터 사망 — 리컨실리에이션 루프.**
-워크플로 상태가 PostgreSQL에 있으므로, 주기적으로(기본 10초) `implementing`/`verifying`에
+워크플로 상태가 PostgreSQL에 있으므로, 주기적으로(기본 2초, `VSI_RECONCILE_INTERVAL_S`) `implementing`/`verifying`에
 머무는 요구사항을 스캔해 실제 Task 상태와 대조하고 차이를 메운다. 이벤트를 재생하는 것이 아니라
 현재 상태를 관찰해 목표 상태로 수렴시키는 방식이며, 쿠버네티스 컨트롤러와 같은 패턴이다.
 크래시 복구가 특수 경로가 아니라 평시에도 도는 루프이므로 테스트가 쉽다.
@@ -339,7 +375,7 @@ idempotency_key = sha256(requirement_id | agent | revision | input_artifact_hash
 
 ### verdict의 출처
 
-초기 요구 정의 안전성 요구 — *"에이전트가 생성한 테스트 결과를 그대로 신뢰하지 않고 실제 실행 결과로
+안전성 요구 — *"에이전트가 생성한 테스트 결과를 그대로 신뢰하지 않고 실제 실행 결과로
 검증한다."*
 
 **`verdict`는 LLM의 주장이 아니라 도구의 종료 코드에서 도출한다.** QA 에이전트가 통과를
@@ -372,9 +408,9 @@ LLM을 제거하면 비결정성이 사라져 **전 구간 통합 테스트가 �
 ```yaml
 scenario: qa_fails_twice
 agents:
- qa: { verdicts: [FAIL, FAIL, PASS] }
- security: { verdicts: [FAIL, PASS, PASS] }
- dev: { attempt_2: crash, latency_ms: 200 }
+  qa:       { verdicts: [FAIL, FAIL, PASS] }
+  security: { verdicts: [FAIL, PASS, PASS] }
+  dev:      { attempt_2: crash, latency_ms: 200 }
 ```
 
 지원 주입 모드:
@@ -435,7 +471,7 @@ GitHub Actions. 단위·계약은 매 푸시, 통합·실패주입은 docker com
 | AgentCapabilities 필드 | `streaming`, `push_notifications`, `extensions`, `extended_agent_card` |
 
 **보안 요구 충족 경로 확인.** 푸시 토큰은 `DatabasePushNotificationConfigStore`에 저장되고
-AgentCard에는 포함되지 않는다. 초기 요구 정의 안전성 요구 *"API 키를 Agent Card나 메시지에 포함하지
+AgentCard에는 포함되지 않는다. 안전성 요구 *"API 키를 Agent Card나 메시지에 포함하지
 않는다"* 를 SDK 구조가 이미 만족한다. SP1의 `security_schemes`는 내부 네트워크 전제의
 공유 시크릿 방식으로 선언한다.
 
@@ -444,6 +480,40 @@ AgentCard에는 포함되지 않는다. 초기 요구 정의 안전성 요구 *"
 구현 중 확인하며, 설계를 뒤집지 않는 범위다.
 
 - `DatabaseTaskStore`의 `owner_resolver` 기본값(`resolve_user_scope`)이 단일 테넌트 환경에서
- 어떻게 동작하는지 — 초기 요구 정의의 "작업 소유권" 요구와 연결 가능한지 검토
+  어떻게 동작하는지 — 작업 소유권 요구와 연결 가능한지 검토
 - `a2a_db_cli` 마이그레이션을 docker compose 기동 순서에 어떻게 끼울지
 - `FastAPIInstrumentor`가 SDK가 추가한 라우트까지 계측하는지 (부착 순서 의존 가능성)
+
+## 12. SP2로 넘기는 제약
+
+SP1 구현이 끝나면서 **SP2가 깨뜨리기 쉬운** 전제들이 드러났다. 여기 모아 둔다.
+
+### 12.1 그 자리 재시도를 넓히면 에이전트측 멱등성이 필수가 된다 (⚠ 과금 직결)
+
+§8 멱등성의 경고 문단과 같은 내용이다. 두 번 적는 이유는, 이 제약을 깨뜨릴 사람이 스펙의
+실패 처리 절이 아니라 **재시도 정책 코드**(`packages/orchestrator/retry.py`)를 보며 작업할
+것이기 때문이다.
+
+- **현재 성립하는 것**: 같은 멱등성 키가 에이전트에 두 번 도달하는 경로가 없다. 그 자리
+  재시도는 `is_undelivered`(= `ConnectError`/`ConnectTimeout`, 바이트 하나도 나가지 않았음이
+  증명된 실패)로만 좁혀져 있고, 모호한 실패는 행을 끝내고 새 `attempt`(= 새 키)로 다시 간다.
+- **깨뜨리는 변경**: `is_undelivered`의 범위를 넓히는 것, 모호한 실패를 같은 행에서 다시
+  보내도록 되돌리는 것, 또는 `attempt`를 키 재료에서 빼는 것.
+- **깨뜨릴 때 반드시 함께 해야 하는 것**: 에이전트가 `vsi_idempotency_key`로 완료된 Task를
+  찾아 재실행 대신 기존 Artifact를 반환하도록 구현하고, 그 동작을 테스트로 고정한다.
+- **안 하면 치르는 비용**: SP1에서는 스텁을 한 번 더 부르는 것(0원). **SP2에서는 중복 LLM
+  과금**이고, 증상이 조용하다 — 결과는 맞게 나오고 청구서만 늘어난다.
+
+### 12.2 `run_s`는 아직 집행되지 않는다
+
+타임아웃 계층의 `run_s`(60분)를 집행하는 코드는 SP1에 없다. SP1의 종료 보장은 시간 예산이
+아니라 **리컨실러의 관측**(열린 행 나이 천장 `stuck_after_s`, 실패 행 수 재시도 캡)에 서
+있다. SP2에서 실제 LLM 지연이 붙어 "느린 것"과 "멈춘 것"을 나이만으로 가르기 어려워지면
+그때 `run_s`를 리컨실러의 요구사항 나이 backstop으로 배선한다. 자세한 것은
+`packages/orchestrator/policy.py`의 모듈 docstring에 층별 배선 현황 표로 있다.
+
+### 12.3 `stuck_after_s` 기본값 60초는 측정된 값이 아니다
+
+SP1 스텁 기준의 추측값이다. `reconciler.force_fail` span의 `vsi.task.open_age_s` 분포가
+쌓여야 근거를 갖고 조정할 수 있다. **SP2에서 실제 LLM 지연이 붙으면 정상 작업이 이 천장에
+강제 실패당한다** — SP2 착수 시 가장 먼저 올려야 할 값이다.

@@ -1,0 +1,14 @@
+# 검증이 두 번 FAIL하고 세 번째에 통과한다 — 순수한 환류 루프(Task 11)용.
+#
+# `qa_fails_twice.yaml`과 verdict 순서는 같지만 dev에 크래시를 주입하지 않는다.
+# 그쪽 시나리오의 `attempt_2: crash`는 **오케스트레이터 재시도(Task 12)**가 있어야
+# 회복되는 fixture다(Task 7 판정 참고: dev 1회차 성공 → 2회차 크래시 → 재시도 →
+# 3회차 성공). 재시도가 없는 Task 11에서 그 시나리오를 쓰면 revision 2의 dev가
+# 실패한 채 멈춘다 — 환류 루프의 결함이 아니라 재시도의 부재다. 두 관심사를
+# 분리해 이 시나리오는 환류만, `qa_fails_twice.yaml`은 재시도만 시험한다.
+scenario: verdicts_fail_twice
+agents:
+  planner:  { verdicts: [] }
+  dev:      { verdicts: [], latency_ms: 200 }
+  qa:       { verdicts: [FAIL, FAIL, PASS] }
+  security: { verdicts: [FAIL, PASS, PASS] }

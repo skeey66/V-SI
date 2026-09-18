@@ -1,0 +1,125 @@
+services:
+  jaeger:
+    # OTel Collector를 별도로 두지 않는다 — Jaeger all-in-one이 OTLP/HTTP를
+    # 직접 받는다(서비스 하나 절약). 4318이 OTLP/HTTP 수신 포트, 16686이 UI/쿼리 API.
+    # 브리프는 `1.62`를 지정했으나 그 태그는 존재하지 않는다(레지스트리에는
+    # `1.62.0`처럼 패치 버전까지 붙은 태그만 있다) — 패치 버전을 채운
+    # `1.62.0`으로 고정한다.
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports: ["16686:16686", "4318:4318"]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: vsi
+      POSTGRES_PASSWORD: vsi
+      POSTGRES_DB: vsi
+    ports: ["55432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vsi"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  orchestrator:
+    build: .
+    command: ["uvicorn", "orchestrator.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
+      VSI_PUSH_URL: http://orchestrator:8000/push
+      VSI_PUSH_TOKEN: ${VSI_PUSH_TOKEN:-dev-only-token}
+      VSI_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
+    depends_on:
+      postgres: { condition: service_healthy }
+    ports: ["8000:8000"]
+    # 이미지에 curl/wget이 없다(python:3.11-slim). 표준 라이브러리로 때린다.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=3).status == 200 else 1)"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  event-gateway:
+    # 오케스트레이터와 별도 프로세스다 — UI가 죽거나 WebSocket이 밀려도
+    # 워크플로는 이 컨테이너와 무관하게 계속 돈다. `orchestrator`가 healthy가
+    # 되어야 스키마(events 등)가 존재한다 — 스키마 소유자는 오케스트레이터
+    # 한 곳뿐이라 여기서는 create_all을 부르지 않는다.
+    build: .
+    command: ["uvicorn", "event_gateway.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
+      VSI_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
+    depends_on:
+      postgres: { condition: service_healthy }
+      orchestrator: { condition: service_healthy }
+    ports: ["8100:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=3).status == 200 else 1)"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  planner: &agent
+    build: .
+    environment:
+      VSI_AGENT: planner
+      VSI_BASE_URL: http://planner:8000
+      VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
+      VSI_SCENARIO: ${VSI_SCENARIO:-scenarios/all_pass.yaml}
+      VSI_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
+    # 스키마 소유자는 오케스트레이터다(SDK의 tasks 테이블을 startup에서 만든다).
+    # 이 의존성이 "에이전트는 오케스트레이터 준비 후에만 뜬다"를 주석이 아니라
+    # 기계가 검사하는 규칙으로 만든다 — 빈 볼륨에 에이전트만 띄우면 디스패치
+    # 시점에 UndefinedTable로 터지기 때문이다.
+    depends_on:
+      postgres: { condition: service_healthy }
+      orchestrator: { condition: service_healthy }
+    ports: ["8001:8000"]
+  dev:
+    <<: *agent
+    environment:
+      VSI_AGENT: dev
+      VSI_BASE_URL: http://dev:8000
+      VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
+      VSI_SCENARIO: ${VSI_SCENARIO:-scenarios/all_pass.yaml}
+      VSI_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
+    ports: ["8002:8000"]
+  qa:
+    <<: *agent
+    environment:
+      VSI_AGENT: qa
+      VSI_BASE_URL: http://qa:8000
+      VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
+      VSI_SCENARIO: ${VSI_SCENARIO:-scenarios/all_pass.yaml}
+      VSI_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
+    ports: ["8003:8000"]
+  security:
+    <<: *agent
+    environment:
+      VSI_AGENT: security
+      VSI_BASE_URL: http://security:8000
+      VSI_DATABASE_URL: postgresql+asyncpg://vsi:vsi@postgres:5432/vsi
+      VSI_SCENARIO: ${VSI_SCENARIO:-scenarios/all_pass.yaml}
+      VSI_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
+    ports: ["8004:8000"]
+
+  web:
+    # Task 16: 실시간 에이전트 그래프. 이벤트 게이트웨이의 WebSocket(8100)에
+    # 브라우저에서 직접 붙는다 — 브라우저는 컴포즈 네트워크 밖에 있으므로
+    # 컨테이너 내부 이름이 아니라 호스트에 노출된 포트로 접속해야 한다
+    # (AgentGraph.tsx의 URL이 `ws://localhost:8100/ws`인 이유).
+    #
+    # 브리프는 `node:22-alpine`을 지정했으나 이 환경의 레지스트리 프록시에서
+    # 그 태그만 계속 0바이트로 멈췄다(`node:20-alpine`, `hello-world`는 정상
+    # 다운로드됨 — 실측으로 다른 태그를 확인). Vite 5는 Node 18+면 충분해
+    # `20-alpine`(LTS, 정상적으로 받아지는 태그)으로 고정한다.
+    image: node:20-alpine
+    working_dir: /app
+    volumes: ["./web:/app"]
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    depends_on: [event-gateway]
+    ports: ["5173:5173"]
