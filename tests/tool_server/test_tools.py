@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from tool_server.tools import (
@@ -9,6 +12,8 @@ from tool_server.tools import (
     run_tests,
     write_file,
 )
+
+_SERVICES_DIR = str(Path(__file__).resolve().parents[2] / "services")
 
 
 def test_write_then_read_roundtrip(tmp_path: Path) -> None:
@@ -155,3 +160,42 @@ def test_run_tests_collection_error_does_not_leak_workspace_root(tmp_path: Path)
     assert not result.ok
     assert str(tmp_path) not in result.detail
     assert str(tmp_path.resolve()) not in result.detail
+
+
+def test_strip_root_does_not_corrupt_output_when_root_is_substring_of_resolved(
+) -> None:
+    """macOS 에서 `/var` 는 `/private/var` 심볼릭 링크다. 그래서 base 가 그
+    아래 있으면 `str(root)` 가 `str(root.resolve())` 안에 그대로 박혀 있는 게
+    정상이다(round 3 의 두 후보 이유). `_strip_root` 가 `{str(root),
+    str(root.resolve())}` 처럼 순서 없는 set 을 그대로 돌면, 어느 후보가
+    먼저 치환되는지는 PYTHONHASHSEED 에 따라 프로세스마다 달라진다 — 짧은
+    후보가 먼저 치환되면 긴 후보 속에 파묻힌 자신의 occurrence 를 갉아먹어
+    "/private" 접두사 잔해가 뒤 내용에 들러붙는다
+    (`File "/privatetest_calc.py"` 처럼).
+
+    이 테스트는 한 번의 실행으로 버그를 재현할 확률이 반반이 되는 걸 피하려고,
+    이 문자열 쌍에서 버그 순서를 내는 것으로 실측 확인한 PYTHONHASHSEED=1 을
+    고정한 서브프로세스에서 `_strip_root` 를 직접 호출한다 — 실제 pytest 를
+    또 띄우는 대신 이 함수 자체의 계약을 검증한다. 수정본(길이 내림차순 정렬)
+    은 순서에 의존하지 않으므로 어느 시드에서도 항상 올바르게 나온다.
+    """
+    script = (
+        "from pathlib import Path\n"
+        "from tool_server.tools import _strip_root\n"
+        "root = Path('/var/folders/xx/tmp-req-1')\n"
+        "text = 'File \"' + str(root.resolve()) + '/test_calc.py\", line 1'\n"
+        "print(_strip_root(root, text))\n"
+    )
+    env = dict(os.environ, PYTHONHASHSEED="1", PYTHONPATH=_SERVICES_DIR)
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    result = proc.stdout.strip()
+    assert "/private" not in result
+    assert "/var/folders" not in result
+    assert result == 'File "test_calc.py", line 1'

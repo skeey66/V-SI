@@ -48,8 +48,19 @@ def _strip_root(root: Path, text: str) -> str:
     `root/` 접두사는 통째로 지워 `root/foo.py` 를 `foo.py` 로 만든다 — 이는
     모델이 write_file 에 넘긴 상대경로와 같은 모양이라 오해를 주지 않는다.
     접두사가 아니라 통째로 root 와 일치하는 경우만 "." 로 남긴다.
+
+    두 후보 중 하나가 다른 하나의 부분 문자열일 수 있다 — macOS 에서 `/var` 가
+    `/private/var` 심볼릭 링크이므로 `str(root)` 가 `str(root.resolve())` 안에
+    그대로 박혀 있는 게 정상이다. `set` 반복 순서는 PYTHONHASHSEED 에 따라
+    프로세스마다 달라지는데, 짧은 후보가 먼저 치환되면 긴 후보 속에 파묻힌
+    자신의 occurrence 를 갉아먹어 "/private" 같은 접두사 잔해만 남기고 뒤에
+    오는 내용에 들러붙는다 (예: `File "/privatetest_calc.py"`). 길이 내림차순
+    으로 정렬해 항상 더 길고 구체적인 후보부터 통째로 지우면, 그 안에 파묻힌
+    짧은 후보는 이미 사라진 뒤라 부분 치환이 일어날 수 없다 — 순서와 무관하게
+    안전하다.
     """
-    for candidate in {str(root), str(root.resolve())}:
+    candidates = sorted({str(root), str(root.resolve())}, key=len, reverse=True)
+    for candidate in candidates:
         if not candidate:
             continue
         text = text.replace(candidate + "/", "").replace(candidate, ".")
