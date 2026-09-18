@@ -78,3 +78,34 @@ def test_run_security_scan_passes_on_clean_code(tmp_path: Path) -> None:
     result = run_security_scan(tmp_path)
     assert result.exit_code == 0
     assert result.ok
+
+
+def test_write_file_parent_path_collides_with_existing_file_is_error_result(tmp_path: Path) -> None:
+    """utils.py 를 나중에 utils/helpers.py 로 리팩터링하면 상위 경로가 파일과 충돌한다."""
+    assert write_file(tmp_path, "foo", "x = 1").ok
+    result = write_file(tmp_path, "foo/bar.py", "y = 2")
+    assert not result.ok
+    assert "파일" in result.detail and "디렉터리" in result.detail
+
+
+def test_write_file_target_collides_with_existing_directory_is_error_result(tmp_path: Path) -> None:
+    (tmp_path / "pkgdir").mkdir()
+    result = write_file(tmp_path, "pkgdir", "x = 1")
+    assert not result.ok
+
+
+def test_run_tests_missing_root_is_error_result_not_exception(tmp_path: Path) -> None:
+    missing_root = tmp_path / "does-not-exist"
+    result = run_tests(missing_root)
+    assert not result.ok
+
+
+def test_read_file_permission_denied_is_error_result(tmp_path: Path) -> None:
+    write_file(tmp_path, "secret.py", "x = 1")
+    target = tmp_path / "secret.py"
+    target.chmod(0o000)
+    try:
+        result = read_file(tmp_path, "secret.py")
+    finally:
+        target.chmod(0o644)
+    assert not result.ok
