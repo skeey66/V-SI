@@ -44,3 +44,21 @@ def test_requirement_id_cannot_escape_base(tmp_path: Path) -> None:
     """요구사항 ID 는 SP2 에서 기획 LLM 이 만들 수 있다 — 루트 이름도 봉쇄한다."""
     with pytest.raises(PathEscape):
         workspace_root(tmp_path, "../elsewhere")
+
+
+def test_dot_requirement_id_is_rejected(tmp_path: Path) -> None:
+    """"." 는 base 자체로 붕괴한다 — 요구사항 루트가 base 와 같아지면 봉쇄가 사라진다."""
+    with pytest.raises(PathEscape):
+        workspace_root(tmp_path, ".")
+
+
+def test_dotdot_requirement_id_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(PathEscape):
+        workspace_root(tmp_path, "..")
+
+
+def test_case_variant_requirement_id_collision_is_rejected(tmp_path: Path) -> None:
+    """대소문자만 다른 ID 는 case-insensitive 파일시스템에서 같은 디렉터리를 가리킨다."""
+    workspace_root(tmp_path, "REQ-1")
+    with pytest.raises(PathEscape):
+        workspace_root(tmp_path, "req-1")
