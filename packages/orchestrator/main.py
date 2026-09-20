@@ -170,7 +170,7 @@ async def _startup() -> None:
     (`create_table=True`). 에이전트 4기가 같은 DB를 공유하므로 첫 병렬 디스패치에서
     네 프로세스가 동시에 `create_all`을 때리면 checkfirst와 실제 CREATE 사이가
     벌어져 "relation already exists"가 난다. 에이전트 쪽 지연 생성을 끄고
-    (`stub_agent/main.py`의 `create_table=False`) 여기서 한 번만 만들어
+    (`agent_entry/main.py`의 `create_table=False`) 여기서 한 번만 만들어
     경합 자체를 없앤다. 에이전트가 이 테이블을 건드리는 유일한 계기는 우리가 보낸
     디스패치이고, 디스패치는 이 startup 훅이 끝난 뒤에야 가능하므로 순서도 성립한다.
     """
