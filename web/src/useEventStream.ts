@@ -45,6 +45,12 @@ export type StreamState = {
   escalationFailureClass: string | null;
   /** revision_started가 참조할, 가장 최근에 FAIL을 낸 검증 에이전트. */
   lastFailedVerifier?: string;
+  /**
+   * 에이전트별 현재 동작 문구 — tool_result의 tool 필드를 그대로 담는다.
+   * tool_result는 자문 이벤트라(스펙 §8.1) 이 필드 외에는 아무것도 바꾸지
+   * 않는다.
+   */
+  activity: Record<string, string>;
 };
 
 const MAX_EVENTS = 200;
@@ -62,6 +68,7 @@ export function initialStreamState(): StreamState {
     escalationAgent: null,
     escalationFailureClass: null,
     lastFailedVerifier: undefined,
+    activity: {},
   };
 }
 
@@ -84,10 +91,19 @@ export function reduceEvents(state: StreamState, e: VsiEvent): StreamState {
   let escalationAgent = state.escalationAgent;
   let escalationFailureClass = state.escalationFailureClass;
   let lastFailedVerifier = state.lastFailedVerifier;
+  let activity = state.activity;
 
   const agent = typeof e.payload.agent === "string" ? e.payload.agent : undefined;
 
   switch (e.event_type) {
+    case "tool_result": {
+      // 자문 이벤트다(스펙 §8.1) — activity 외의 어떤 필드도 건드리지 않는다.
+      const tool = typeof e.payload.tool === "string" ? e.payload.tool : undefined;
+      if (agent && tool) {
+        activity = { ...activity, [agent]: tool };
+      }
+      break;
+    }
     case "task_submitted": {
       if (agent) {
         activeAgents.add(agent);
@@ -157,6 +173,7 @@ export function reduceEvents(state: StreamState, e: VsiEvent): StreamState {
     escalationAgent,
     escalationFailureClass,
     lastFailedVerifier,
+    activity,
   };
 }
 

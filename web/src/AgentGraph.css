@@ -149,6 +149,13 @@
   fill: var(--text-faint);
 }
 
+.vsi-node-activity {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-style: italic;
+  fill: var(--text-faint);
+}
+
 .vsi-badge-text {
   font-family: var(--font-mono);
   font-size: 9.5px;
