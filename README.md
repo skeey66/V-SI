@@ -42,10 +42,17 @@ SP1의 커널 위에서, 스텁이 아니라 **로컬 모델(Ollama)이 실제�
 6가지와, 각각을 무엇이 고정하는지는 [SP2 설계 문서](docs/specs/2026-09-18-sp2-llm-agents-design.md)
 13절에 있다 — 핵심은 실제 LLM 종단 실행(기준 1), 워크스페이스 탈출 차단(기준 2),
 판정은 도구 종료코드가 이긴다(기준 3), 환류가 실제 실패 출력에 근거한다(기준 4),
-SP1 회귀 없음(기준 5), 외부 LLM API 호출 0회(기준 6)다. 6개 모두
-`tests/integration/test_acceptance.py::test_completion_criterion_{1..6}_*`가 고정한다.
+SP1 회귀 없음(기준 5), 외부 LLM API 호출 0회(기준 6)다. 6개 전부가
+`test_acceptance.py::test_completion_criterion_{1..6}_*`에 있는 게 아니다 — 그
+파일은 SP1의 다섯 완료 정의(기준 5를 고정)와, SP2가 더한 "Ollama만 쓴다"는
+확인(기준 6, `test_completion_criterion_5_*`의 확장 + `test_completion_criterion_6_*`)
+만 담는다. 실제 모델을 켜야만 검증되는 기준 1(실제 LLM 종단 실행)은
+`tests/integration/test_llm_end_to_end.py`가, 기준 2(워크스페이스 탈출 차단)는
+`tests/tool_server/test_paths.py`와 `tests/integration/test_isolation.py`가,
+기준 3(판정은 도구 종료코드)·기준 4(환류가 실제 실패 출력에 근거)도
+`test_llm_end_to_end.py`가 고정한다.
 
-**실측 한 건**: `qa_fails_twice` 시나리오, 모델 `qwen3:8b`(호스트 Ollama), 비용 0원.
+**실측 한 건**: 모델 `qwen3:8b`(호스트 Ollama), 비용 0원.
 환류 2회(리비전 3회)를 거쳐 11분 30초 만에 `accepted`에 도달했다 — 리비전 1
 `qa FAIL / security PASS`, 리비전 2 `qa FAIL / security PASS`, 리비전 3
 `qa PASS / security PASS`. dev는 QA가 돌린 실제 pytest 실패
