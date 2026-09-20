@@ -6,4 +6,4 @@ COPY services ./services
 COPY scenarios ./scenarios
 RUN pip install --no-cache-dir -e .
 ENV PYTHONPATH=/app/packages:/app/services
-CMD ["uvicorn", "stub_agent.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "agent_entry.main:app", "--host", "0.0.0.0", "--port", "8000"]
