@@ -186,16 +186,36 @@ async def test_verdict_nudge_respects_the_turn_cap() -> None:
     assert "턴" in str(exc.value)
 
 
-async def test_non_verifier_is_never_nudged() -> None:
-    """dev/planner 는 도구를 안 부르고 끝내는 것 자체가 정상 종료다 — 검증자가
-    아니므로 nudge 경로를 타지 않는다."""
+async def test_non_verifier_that_calls_no_tools_fails_without_a_nudge() -> None:
+    """dev/planner 가 도구를 하나도 안 부르고 턴을 끝내면 그 자체로 EXECUTION
+    실패다 (스펙 §5.3, §10 실패표 — "도구 호출 0회"는 무조건 EXECUTION
+    실패다). 다만 검증자 전용 nudge 경로는 타지 않는다 — 정정 대상은
+    "판정 도구를 안 불렀다"는 검증자 특유의 계약 위반이지, 비검증자가 그냥
+    아무것도 안 한 것을 재촉해서 고칠 성질이 아니다. 그래서 재시도 없이
+    첫 턴 만에 `LoopFailed` 로 끝나야 한다.
+
+    (이전 버전의 이 시험은 정반대 — `result.turns == 1`로 "정상 종료"를
+    단언했다. 그게 바로 이 수정이 없애는 버그다: 기획이 프리텍스트만 남기고
+    아무 파일도 안 써도 `exit_code=0`짜리 "성공" 산출물이 기록됐다.)"""
     llm = _ScriptedLlm([ChatReply(content="설계만 하고 끝냈다")])
-    result = await run_loop(
-        role=ROLES["planner"], llm=llm, bridge=_RecordingBridge(), schemas=[],
-        title="계산기", revision=1, feedback=[],
-    )
-    assert result.turns == 1
-    assert len(llm.seen) == 1
+    with pytest.raises(LoopFailed) as exc:
+        await run_loop(
+            role=ROLES["planner"], llm=llm, bridge=_RecordingBridge(), schemas=[],
+            title="계산기", revision=1, feedback=[],
+        )
+    assert "도구" in str(exc.value)
+    assert len(llm.seen) == 1  # nudge 없이 첫 턴 만에 실패 확정.
+
+
+async def test_dev_that_calls_no_tools_fails() -> None:
+    """같은 실패가 dev 에도 적용된다 — planner 전용 버그가 아니다."""
+    llm = _ScriptedLlm([ChatReply(content="음, 어렵네")])
+    with pytest.raises(LoopFailed) as exc:
+        await run_loop(
+            role=ROLES["dev"], llm=llm, bridge=_RecordingBridge(), schemas=[],
+            title="계산기", revision=1, feedback=[],
+        )
+    assert "도구" in str(exc.value)
 
 
 async def test_non_verifier_payload_has_no_verdict() -> None:
@@ -321,16 +341,16 @@ async def test_tool_named_like_the_sentinel_with_arbitrary_arguments_does_not_cr
 
 
 class _FlakyThenOkLlm:
-    def __init__(self, fail_times: int, reply: ChatReply) -> None:
+    def __init__(self, fail_times: int, replies: list[ChatReply]) -> None:
         self._fail_times = fail_times
-        self._reply = reply
+        self._replies = list(replies)
         self.calls = 0
 
     async def chat(self, messages, tools):
         self.calls += 1
         if self.calls <= self._fail_times:
             raise OllamaUnavailable("loading")
-        return self._reply
+        return self._replies.pop(0) if self._replies else ChatReply(content="끝")
 
 
 class _AlwaysDownLlm:
@@ -348,13 +368,19 @@ async def test_ollama_unavailable_is_retried_without_consuming_a_turn() -> None:
     async def fake_sleep(seconds: float) -> None:
         sleeps.append(seconds)
 
-    llm = _FlakyThenOkLlm(2, ChatReply(content="끝"))
+    # 도구 호출이 하나도 없으면(Critical 2) 이 테스트가 확인하려는 것과
+    # 무관한 이유로 `LoopFailed`가 난다 — 재시도 회계만 보고 싶으므로 회복
+    # 직후 응답에 도구 호출을 하나 담고, 그다음 턴에 도구 없이 끝낸다.
+    llm = _FlakyThenOkLlm(2, [
+        ChatReply(tool_calls=[ToolCall("write_file", {"path": "a.py", "content": "x"})]),
+        ChatReply(content="끝"),
+    ])
     result = await run_loop(
         role=ROLES["dev"], llm=llm, bridge=_RecordingBridge(), schemas=[],
         title="계산기", revision=1, feedback=[], sleep=fake_sleep,
     )
-    assert result.turns == 1
-    assert llm.calls == 3
+    assert result.turns == 2
+    assert llm.calls == 4
     assert len(sleeps) == 2
 
 
@@ -590,3 +616,113 @@ async def test_a_hanging_tool_call_is_capped_independent_of_the_remaining_budget
     # 잘렸다는 사실 자체가 모델에게 메시지로 전달돼야 한다 — 그냥 빈 결과나
     # 예외로 사라지면 상한을 둔 의미가 없다.
     assert any("끝나지 않았다" in str(m.get("content", "")) for m in llm.seen[-1])
+
+
+# ---------------------------------------------------------------------------
+# Critical 1: 산출물 payload 에 실제로 작성된 파일 내용을 담는다 (스펙 §6.3/§5.2)
+# ---------------------------------------------------------------------------
+
+
+async def test_dev_payload_captures_written_files_from_the_call_arguments() -> None:
+    """`engine.on_task_completed` 가 DB 에 담을 유일한 근거는 이 payload 다
+    (스펙 §6.3) — write_file 호출 인자에서 path/content 를 그대로 뽑아
+    `files` 에 넣는다. 워크스페이스를 되읽는 게 아니라 **모델이 실제로 부른
+    호출의 인자**가 출처다."""
+    llm = _ScriptedLlm([
+        ChatReply(tool_calls=[
+            ToolCall("write_file", {"path": "a.py", "content": "def add(a, b):\n    return a + b\n"}),
+            ToolCall("write_file", {"path": "b.py", "content": "x = 1\n"}),
+        ]),
+        ChatReply(content="완료"),
+    ])
+    bridge = _RecordingBridge({"ok": True, "detail": "썼다"})
+    result = await run_loop(
+        role=ROLES["dev"], llm=llm, bridge=bridge, schemas=[],
+        title="계산기", revision=1, feedback=[],
+    )
+    assert result.payload["files"] == {
+        "a.py": "def add(a, b):\n    return a + b\n",
+        "b.py": "x = 1\n",
+    }
+
+
+async def test_a_later_write_to_the_same_path_replaces_the_earlier_one() -> None:
+    llm = _ScriptedLlm([
+        ChatReply(tool_calls=[ToolCall("write_file", {"path": "a.py", "content": "one"})]),
+        ChatReply(tool_calls=[ToolCall("write_file", {"path": "a.py", "content": "two"})]),
+        ChatReply(content="완료"),
+    ])
+    bridge = _RecordingBridge({"ok": True, "detail": "썼다"})
+    result = await run_loop(
+        role=ROLES["dev"], llm=llm, bridge=bridge, schemas=[],
+        title="계산기", revision=1, feedback=[],
+    )
+    assert result.payload["files"] == {"a.py": "two"}
+
+
+async def test_a_rejected_write_does_not_appear_in_the_files_snapshot() -> None:
+    """경로 탈출 시도처럼 `ok: False`로 끝난 쓰기는 산출물이 아니다 — 실행이
+    실패했는데도 파일이 "생산된 것처럼" 기록되면 §6.3 의 근거가 거짓이 된다."""
+    llm = _ScriptedLlm([
+        ChatReply(tool_calls=[ToolCall("write_file", {"path": "../escape.py", "content": "evil"})]),
+        ChatReply(content="포기"),
+    ])
+    bridge = _RecordingBridge({"ok": False, "detail": "워크스페이스를 벗어나는 경로다"})
+    result = await run_loop(
+        role=ROLES["dev"], llm=llm, bridge=bridge, schemas=[],
+        title="계산기", revision=1, feedback=[],
+    )
+    assert result.payload["files"] == {}
+
+
+async def test_verifiers_have_no_files_key_in_the_payload() -> None:
+    """qa/security 는 write_file 도구 자체가 없다(권한 분리, 스펙 §5.1) —
+    항상 빈 `files`를 넣느니, 이 산출물 종류엔 애초에 해당 개념이 없다는
+    뜻으로 키 자체를 뺀다."""
+    llm = _ScriptedLlm([
+        ChatReply(tool_calls=[ToolCall("run_tests", {})]),
+        ChatReply(content="끝"),
+    ])
+    bridge = _RecordingBridge({"ok": True, "detail": "이상 없음", "exit_code": 0})
+    result = await run_loop(
+        role=ROLES["qa"], llm=llm, bridge=bridge, schemas=[],
+        title="계산기", revision=1, feedback=[],
+    )
+    assert "files" not in result.payload
+
+
+async def test_a_file_over_the_per_file_cap_is_truncated_and_flagged() -> None:
+    from llm_agent.loop import FILE_SNAPSHOT_PER_FILE_CAP_BYTES
+
+    huge = "x" * (FILE_SNAPSHOT_PER_FILE_CAP_BYTES + 500)
+    llm = _ScriptedLlm([
+        ChatReply(tool_calls=[ToolCall("write_file", {"path": "big.py", "content": huge})]),
+        ChatReply(content="완료"),
+    ])
+    bridge = _RecordingBridge({"ok": True, "detail": "썼다"})
+    result = await run_loop(
+        role=ROLES["dev"], llm=llm, bridge=bridge, schemas=[],
+        title="계산기", revision=1, feedback=[],
+    )
+    stored = result.payload["files"]["big.py"]
+    assert len(stored.encode("utf-8")) <= FILE_SNAPSHOT_PER_FILE_CAP_BYTES + 200
+    assert len(stored) < len(huge)
+    assert result.payload["files_truncated"] is True
+
+
+async def test_total_snapshot_cap_is_enforced_across_many_files() -> None:
+    from llm_agent.loop import FILE_SNAPSHOT_TOTAL_CAP_BYTES
+
+    # 파일당 상한보다는 한참 작지만, 개수를 늘리면 합이 전체 상한을 넘는다.
+    chunk = "y" * 1_000
+    n = (FILE_SNAPSHOT_TOTAL_CAP_BYTES // len(chunk)) + 5
+    calls = [ToolCall("write_file", {"path": f"f{i}.py", "content": chunk}) for i in range(n)]
+    llm = _ScriptedLlm([ChatReply(tool_calls=calls), ChatReply(content="완료")])
+    bridge = _RecordingBridge({"ok": True, "detail": "썼다"})
+    result = await run_loop(
+        role=ROLES["dev"], llm=llm, bridge=bridge, schemas=[],
+        title="계산기", revision=1, feedback=[],
+    )
+    total = sum(len(v.encode("utf-8")) for v in result.payload["files"].values())
+    assert total <= FILE_SNAPSHOT_TOTAL_CAP_BYTES + 200
+    assert result.payload["files_truncated"] is True
