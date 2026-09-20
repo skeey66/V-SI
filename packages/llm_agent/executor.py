@@ -6,11 +6,14 @@ SP1 의 이벤트 순서 규칙을 그대로 지킨다 — **Task 이벤트를 �
 (`a2a/server/agent_execution/active_task.py`, `packages/stub_agent/executor.py`
 가 이미 이 순서를 지키고 있다).
 
-`LoopFailed` 는 잡지 않고 전파한다. SDK 가 처리되지 않은 예외를
-`TASK_STATE_ERROR` 로 바꾸고, 오케스트레이터의 재시도·환류 상한이 이어받는다
-(스펙 §10).
+`LoopFailed` 는 잡지 않고 전파한다. SDK 는 `execute()` 의 처리되지 않은 예외를
+`TASK_STATE_FAILED` 로 바꾼다(실제로 설치된 SDK 에는 `TASK_STATE_ERROR` 라는
+상태가 없다 — `TaskState` 에 정의된 값은 SUBMITTED/WORKING/COMPLETED/FAILED/
+CANCELED/REJECTED/INPUT_REQUIRED/AUTH_REQUIRED 뿐이다). 아티팩트 없이
+FAILED 로 끝나면 오케스트레이터는 EXECUTION 실패로 분류해 재시도·환류 상한을
+이어받는다(스펙 §10).
 
-**브리프(Task 9 계획) 대비 실제 인터페이스 차이 세 가지, 전부 실측 확인:**
+**브리프(Task 9 계획) 대비 실제 인터페이스 차이, 전부 실측 확인:**
 
 1. MCP `Tool` 객체는 `inputSchema` 가 아니라 `input_schema`(스네이크케이스)를
    낸다 — 설치된 mcp SDK 를 `tests/llm_agent/test_mcp_client.py`/Task 5 리뷰가
@@ -26,13 +29,39 @@ SP1 의 이벤트 순서 규칙을 그대로 지킨다 — **Task 이벤트를 �
    (`services/tool_server/main.py`). 이 클래스는 role 을 URL 에 엮지 않는다 —
    생성자에 role 이 이미 반영된 `mcp_url` 을 그대로 받아 쓴다. 엮는 책임은
    이 클래스를 생성하는 쪽(Task 12 의 `build_executor`)에 있다.
+4. `mcp.client.streamable_http` 의 공개 함수 이름은 `streamablehttp_client` 가
+   아니라 `streamable_http_client` 이고, 그 컨텍스트매니저는
+   `(read_stream, write_stream)` 2-튜플만 낸다 — 구버전 SDK 의 3-튜플
+   `(read, write, get_session_id)` 패턴이 아니다.
 
-추가로 실측한 것(브리프에는 없던 차이): `mcp.client.streamable_http` 의
-공개 함수 이름은 `streamablehttp_client` 가 아니라 `streamable_http_client`
-이고, 그 컨텍스트매니저는 `(read_stream, write_stream)` 2-튜플만 낸다 —
-구버전 SDK 의 3-튜플 `(read, write, get_session_id)` 패턴이 아니다.
+**리뷰 라운드 1 에서 추가된 것 (교차 참조: `docs/plans` 없음, 이 파일 안에서
+새로 판단):**
+
+- **`mcp_url` 이 실제로 이 역할의 도구를 광고하는지 확인한다.** 잘못된 마운트
+  경로(예: `dev` 가 `/mcp/qa/` 를 바라봄)로도 `ToolBridge` 의 허용 목록 검사가
+  권한 상승은 막아준다 — `tool_schemas`/`ToolBridge` 둘 다 `role.tools` 로
+  걸러서 구성되므로, 잘못 연결된 dev 가 `run_tests` 를 부를 수는 없다. 진짜
+  위험은 그게 아니라: 서버가 광고하지 않는 이름은 `tool_schemas` 가 조용히
+  건너뛰므로(`mcp_client.py`), 잘못 연결되면 스키마가 **비거나 모자란 채로**
+  모델에게 간다 — 모델은 도구를 한 번도 못(또는 일부만) 부르고 한 턴 만에
+  끝내고, `loop.py` 는 (검증자가 아니면) `exit_code = 0` 을 찍는다.
+  오케스트레이터 눈에는 "dev 가 성공적으로 끝냈다"로 보이지만 실제로는 코드를
+  한 줄도 못 썼다 — 성공으로 위장한 무동작. 그래서 도구 목록을 받은 직후,
+  `role.tools` 가 전부 스키마에 있는지 확인하고 없으면 `McpRoleMismatch` 로
+  요란하게 죽는다. 시끄러운 기동 실패가 조용한 성공보다 낫다.
+- **자문 이벤트 기록 실패가 에이전트 실행을 끝내면 안 된다.** Task 8 은
+  `on_tool` 을 인라인 `await` 로 부르기로 했다(백그라운드 `create_task` 의
+  가비지 컬렉션 위험을 피하려고) — 그 판단은 유지한다. 하지만 `loop.py` 는
+  `on_tool` 을 무조건 `await` 만 할 뿐 그 실패를 흡수하지 않는다(그건
+  `loop.py` 의 책임이 아니다 — 그 파일은 `on_tool` 이 무엇을 하든 상관하지
+  않는 일반 계약만 진다). "이 이벤트는 워크플로 권위가 없다"(`events.py`,
+  스펙 §8.1)는 지식은 `record_tool_event` 를 실제로 호출하는 여기(executor)
+  에 있으므로, 가드도 여기에 둔다 — `loop.py` 를 건드리지 않는다. Postgres
+  순단 하나가 도구 호출 상한(최대 90초)이나 턴 전체를 태우는 사고를 막는다.
 """
 from __future__ import annotations
+
+import logging
 
 import httpx
 from a2a.helpers import get_data_parts, new_task
@@ -50,6 +79,19 @@ from llm_agent.loop import run_loop
 from llm_agent.mcp_client import ToolBridge, tool_schemas
 from llm_agent.ollama import OllamaClient
 from llm_agent.roles import ROLES
+
+logger = logging.getLogger(__name__)
+
+
+class McpRoleMismatch(RuntimeError):
+    """`mcp_url` 이 이 역할에 필요한 도구를 다 광고하지 않는다.
+
+    잘못된 역할 경로로 연결됐다는 뜻이다(예: dev 가 `/mcp/qa/` 를 바라봄).
+    권한 상승은 `ToolBridge`/`tool_schemas` 의 허용 목록 검사가 이미 막지만,
+    이 상황을 그냥 두면 도구가 없는 채로 모델이 한 턴 만에 끝내
+    "성공"(`exit_code=0`)으로 기록될 수 있다 — 그래서 조용히 넘어가지 않고
+    여기서 죽는다.
+    """
 
 
 def payload_to_part(payload: dict) -> Part:
@@ -82,7 +124,14 @@ class LlmExecutor(AgentExecutor):
         `execute` 에서 분리해 둔 이유는 A2A 이벤트 배관 없이 단위 테스트할 수
         있게 하기 위해서다.
         """
-        requirement_id = payload["requirement_id"]
+        requirement_id = payload.get("requirement_id")
+        if not requirement_id:
+            # 그냥 `payload["requirement_id"]` 로 두면 `KeyError:
+            # 'requirement_id'` 뿐이라 진단이 얇다 — 무엇이 왔는지(빈 dict?
+            # 다른 키만 있는 dict?)를 에러 메시지에 남긴다.
+            raise ValueError(
+                f"디스패치 페이로드에 'requirement_id' 가 없다: {payload!r}"
+            )
         title = payload.get("title") or requirement_id
         revision = int(payload.get("revision") or 1)
         feedback = payload.get("feedback") or []
@@ -93,10 +142,20 @@ class LlmExecutor(AgentExecutor):
             # `create_task` 조합은 태스크 참조 유실로 이벤트를 잃을 수 있다).
             if self._session_maker is None:
                 return
-            await record_tool_event(
-                self._session_maker, requirement_id=requirement_id,
-                agent=self.role.name, revision=revision, tool=name, result=result,
-            )
+            try:
+                await record_tool_event(
+                    self._session_maker, requirement_id=requirement_id,
+                    agent=self.role.name, revision=revision, tool=name, result=result,
+                )
+            except Exception:
+                # 자문 이벤트는 워크플로 권위가 없다(`events.py`, 스펙 §8.1) —
+                # 이 기록이 실패해도 에이전트 실행 자체가 죽으면 안 된다.
+                # 인라인 `await` (Task 8 의 판단)는 유지하고 실패만 여기서
+                # 삼킨다.
+                logger.exception(
+                    "자문 이벤트 기록 실패 — 에이전트 실행은 계속한다 "
+                    "(requirement_id=%s, tool=%s)", requirement_id, name,
+                )
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as http:
             llm = OllamaClient(self._ollama_url, self._model, http)
@@ -115,6 +174,15 @@ class LlmExecutor(AgentExecutor):
                         for t in listed.tools
                     ]
                     schemas = tool_schemas(self.role.tools, raw)
+                    schema_names = {s["function"]["name"] for s in schemas}
+                    missing = set(self.role.tools) - schema_names
+                    if missing:
+                        raise McpRoleMismatch(
+                            f"'{self.role.name}' 역할이 {self._mcp_url!r} 에 "
+                            f"연결됐지만 그 서버는 이 역할에 필요한 도구를 "
+                            f"다 광고하지 않는다 — 없는 도구: {sorted(missing)}. "
+                            "잘못된 역할 경로로 연결됐을 가능성이 높다."
+                        )
                     bridge = ToolBridge(session, requirement_id, self.role.tools)
                     result = await run_loop(
                         role=self.role, llm=llm, bridge=bridge, schemas=schemas,
