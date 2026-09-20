@@ -26,3 +26,20 @@ def test_default_mode_is_stub() -> None:
     from agent_entry.main import DEFAULT_MODE
 
     assert DEFAULT_MODE == "stub"
+
+
+def test_default_mcp_url_composition_mounts_the_agents_own_role() -> None:
+    """`main.py`가 `VSI_MCP_URL`이 없을 때 각 에이전트에 채워 주는 기본
+    MCP URL — 역할별로 `/mcp/<role>/` 에 마운트된 서버(`services/tool_server/
+    main.py`)와 일치해야 한다. 이 배선이 실제로 어긋난 채(모든 에이전트가
+    같은 URL을 봄) 배포된 적이 있다 — 실측: 첫 디스패치에서 4개 에이전트
+    전부 HTTP 421을 받은 라이브 장애. 이 조합 로직은 지금 `if "VSI_AGENT"
+    in os.environ:` 이라는 모듈 최상단 가드 안에서만 돌아서(uvicorn 이
+    `agent_entry.main:app` 을 부팅할 때만 실행), 벌거벗은 `import` 로는 전혀
+    실행되지 않는다 — 그래서 순수 함수로 뽑아 직접 부른다."""
+    from agent_entry.main import default_mcp_url
+
+    assert default_mcp_url("dev") == "http://workspace:8000/mcp/dev/"
+    assert default_mcp_url("qa") == "http://workspace:8000/mcp/qa/"
+    assert default_mcp_url("planner") == "http://workspace:8000/mcp/planner/"
+    assert default_mcp_url("security") == "http://workspace:8000/mcp/security/"
