@@ -58,7 +58,7 @@ def build_executor(
 # 아래 배선은 `VSI_AGENT`가 있을 때만 돈다 — uvicorn이 `agent_entry.main:app`을
 # 부팅할 때는 항상 있지만(compose가 4개 에이전트 모두에 채워 준다), 단위
 # 테스트는 `build_executor`/`UnknownMode`/`DEFAULT_MODE`만 임포트하고 앱을
-# 조립하지 않는다(`stub_agent/main.py`와 동일한 전제 — SP1도 그 모듈을 실제
+# 조립하지 않는다(SP1의 진입점과 동일한 전제 — 그 모듈도 실제
 # 컨테이너 기동으로만 검증했지 벌거벗은 `import`로 단위 테스트하지 않았다).
 # 이 가드가 없으면 `os.environ["VSI_AGENT"]`가 테스트 프로세스에서 즉시
 # `KeyError`를 던져 `build_executor`조차 임포트할 수 없다.
