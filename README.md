@@ -128,10 +128,15 @@ cd web && npm ci && npm test       # vitest — 그래프 리듀서
 
 기본 실행에서는 `llm` 마커가 붙은 시험이 제외된다(`pyproject.toml`의
 `addopts = "-m 'not llm'"`) — 실제 모델을 부르는 시험은 느리고 비결정적이라
-CI 기본 스위트에 넣지 않는다. 실측 기본 스위트: **295 passed, 4 deselected**
+CI 기본 스위트에 넣지 않는다. 실측 기본 스위트: **296 passed, 4 deselected**
 (그 4개가 `llm`으로 마킹된 시험이다). `llm` 마커가 붙은 시험만 따로 돌리려면
-`pytest tests -m llm --no-header`를 쓴다 — 로컬 Ollama가 떠 있어야 하고 몇 분
-걸린다.
+`pytest tests -m llm --no-header`를 쓴다 — 로컬 Ollama가 떠 있어야 하고
+요구사항 하나에 10분 이상 걸린다.
+
+**`escalated`로 끝나는 것도 성공이다.** 8b 로컬 모델이 과제를 못 푸는 일은
+흔하고, 그때 환류 상한이 제대로 돌아 실행이 유한하게 끝나는 것이 이 설계가
+작동한다는 증거다. 시험은 "코드가 맞다"가 아니라 "종단 상태에 도달했다,
+판정이 종료코드에서 나왔다, 도구가 실제로 호출됐다"를 단언한다.
 
 `tests/orchestrator`는 "단위"지만 진짜 postgres에 붙는다(매 시험마다 스키마를 비운다).
 CI는 세 job으로 나뉘어 있다 — `unit`(postgres 서비스 컨테이너), `integration`(컴포즈 전체
