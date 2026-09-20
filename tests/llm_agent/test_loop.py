@@ -281,3 +281,171 @@ async def test_a_hanging_chat_call_is_bounded_by_the_remaining_budget() -> None:
     elapsed = time.monotonic() - started
     assert "예산" in str(exc.value)
     assert elapsed < 2.0
+
+
+# --- 리뷰 라운드 1 수정 사항 ------------------------------------------------
+
+
+class _AdvancingClock:
+    """`bridge.call` 이 걸릴 때마다 논리 시계를 앞으로 돌린다."""
+
+    def __init__(self, start: float = 0.0) -> None:
+        self.value = start
+
+    def now(self) -> float:
+        return self.value
+
+    def advance(self, delta: float) -> None:
+        self.value += delta
+
+
+class _SlowBridge:
+    def __init__(self, clock: _AdvancingClock, per_call_s: float) -> None:
+        self._clock = clock
+        self._per_call = per_call_s
+        self.calls = 0
+
+    async def call(self, name, arguments):
+        self.calls += 1
+        self._clock.advance(self._per_call)
+        return {"ok": True, "detail": "ok"}
+
+
+async def test_budget_is_checked_between_tool_calls_in_a_single_reply() -> None:
+    """네 개의 도구 호출이 든 응답 하나가 예산을 몇 배로 넘기지 못해야 한다."""
+    clock = _AdvancingClock()
+    bridge = _SlowBridge(clock, per_call_s=500.0)
+    llm = _ScriptedLlm([
+        ChatReply(tool_calls=[
+            ToolCall("write_file", {"path": "a.py", "content": "x"}),
+            ToolCall("write_file", {"path": "b.py", "content": "x"}),
+            ToolCall("write_file", {"path": "c.py", "content": "x"}),
+            ToolCall("write_file", {"path": "d.py", "content": "x"}),
+        ]),
+    ])
+    with pytest.raises(LoopFailed) as exc:
+        await run_loop(
+            role=ROLES["dev"], llm=llm, bridge=bridge, schemas=[],
+            title="계산기", revision=1, feedback=[],
+            now=clock.now, budget_s=600.0,
+        )
+    assert "예산" in str(exc.value)
+    # 예산을 이미 넘긴 다음 호출은 아예 시도되지 않는다 — 4개 전부 도는 것도,
+    # 다음 while 반복까지 기다리는 것도 아니다.
+    assert bridge.calls < 4
+
+
+async def test_a_hanging_tool_call_is_bounded_by_the_remaining_budget() -> None:
+    """멈춘 도구 호출 하나가 chat() 처럼 남은 예산으로 잘려야 한다."""
+
+    class _HangingBridge:
+        async def call(self, name, arguments):
+            await asyncio.sleep(10)
+            return {"ok": True, "detail": "너무 늦었다"}
+
+    llm = _ScriptedLlm([
+        ChatReply(tool_calls=[ToolCall("write_file", {"path": "a.py", "content": "x"})]),
+    ])
+    started = time.monotonic()
+    with pytest.raises(LoopFailed) as exc:
+        await run_loop(
+            role=ROLES["dev"], llm=llm, bridge=_HangingBridge(), schemas=[],
+            title="계산기", revision=1, feedback=[], budget_s=0.05,
+        )
+    elapsed = time.monotonic() - started
+    assert "예산" in str(exc.value)
+    assert elapsed < 2.0
+
+
+async def test_bridge_exception_becomes_a_message_not_an_exception() -> None:
+    """`ToolNotAllowed` 말고 다른 예외(끊긴 세션 등)도 대화를 죽이면 안 된다."""
+
+    class _FlakyBridge:
+        async def call(self, name, arguments):
+            raise RuntimeError("MCP 세션이 끊겼다")
+
+    llm = _ScriptedLlm([
+        ChatReply(tool_calls=[ToolCall("write_file", {"path": "a.py", "content": "x"})]),
+        ChatReply(content="알겠다"),
+    ])
+    result = await run_loop(
+        role=ROLES["dev"], llm=llm, bridge=_FlakyBridge(), schemas=[],
+        title="계산기", revision=1, feedback=[],
+    )
+    assert result.turns == 2
+    assert any("세션이 끊겼다" in str(m.get("content", "")) for m in llm.seen[-1])
+
+
+async def test_non_dict_tool_result_from_a_verifier_does_not_crash_the_loop() -> None:
+    """dict 가 아닌 결과에 `.get("exit_code")` 를 부르면 AttributeError 다 —
+    근거 없는 통과를 만들지 않되, 예외로 죽지도 않아야 한다."""
+
+    class _WeirdBridge:
+        async def call(self, name, arguments):
+            return "그냥 문자열"
+
+    llm = _ScriptedLlm([ChatReply(tool_calls=[ToolCall("run_tests", {})])])
+    with pytest.raises(LoopFailed):
+        await run_loop(
+            role=ROLES["qa"], llm=llm, bridge=_WeirdBridge(), schemas=[],
+            title="계산기", revision=1, feedback=[],
+        )
+
+
+async def test_unserializable_tool_result_does_not_crash_the_loop() -> None:
+    """`json.dumps` 가 그대로 못 삼키는 값이 결과에 섞여도 죽지 않는다."""
+
+    class _NotJsonNative:
+        def __repr__(self) -> str:
+            return "<특이한 객체>"
+
+    class _WeirdBridge:
+        async def call(self, name, arguments):
+            return {"ok": True, "detail": "ok", "payload": _NotJsonNative()}
+
+    llm = _ScriptedLlm([
+        ChatReply(tool_calls=[ToolCall("write_file", {"path": "a.py", "content": "x"})]),
+        ChatReply(content="끝"),
+    ])
+    result = await run_loop(
+        role=ROLES["dev"], llm=llm, bridge=_WeirdBridge(), schemas=[],
+        title="계산기", revision=1, feedback=[],
+    )
+    assert result.turns == 2
+
+
+async def test_ollama_http_status_error_becomes_loopfailed_without_retry() -> None:
+    """404(모델을 안 받아온 흔한 설정 실수) 는 재시도 대상이 아니다."""
+    import httpx
+
+    class _Http404Llm:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def chat(self, messages, tools):
+            self.calls += 1
+            request = httpx.Request("POST", "http://fake/api/chat")
+            response = httpx.Response(404, request=request)
+            raise httpx.HTTPStatusError("not found", request=request, response=response)
+
+    llm = _Http404Llm()
+    with pytest.raises(LoopFailed):
+        await run_loop(
+            role=ROLES["dev"], llm=llm, bridge=_RecordingBridge(), schemas=[],
+            title="계산기", revision=1, feedback=[],
+        )
+    assert llm.calls == 1
+
+
+async def test_ollama_json_decode_error_becomes_loopfailed() -> None:
+    import json as _json
+
+    class _BadJsonLlm:
+        async def chat(self, messages, tools):
+            raise _json.JSONDecodeError("bad", "doc", 0)
+
+    with pytest.raises(LoopFailed):
+        await run_loop(
+            role=ROLES["dev"], llm=_BadJsonLlm(), bridge=_RecordingBridge(), schemas=[],
+            title="계산기", revision=1, feedback=[],
+        )

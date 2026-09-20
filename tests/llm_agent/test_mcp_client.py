@@ -104,3 +104,57 @@ async def test_malformed_tool_call_sentinel_is_rejected_like_any_other_unknown_t
     bridge = ToolBridge(_FakeSession(), "REQ-7", ["write_file"])
     with pytest.raises(ToolNotAllowed, match="__malformed_tool_call__"):
         await bridge.call("__malformed_tool_call__", {"error": "boom", "raw": "x"})
+
+
+class _FakeCallToolResult:
+    """실제 mcp SDK 의 `CallToolResult` 모양을 흉내낸다 — dict 가 아니다."""
+
+    def __init__(self, structured_content=None, content=None, is_error: bool = False) -> None:
+        self.structured_content = structured_content
+        self.content = content or []
+        self.is_error = is_error
+
+
+class _TextBlock:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class _RealisticSession:
+    """`call_tool` 이 dict 가 아니라 `CallToolResult` 를 돌려주는 세션."""
+
+    def __init__(self, result) -> None:
+        self._result = result
+        self.calls: list[tuple[str, dict]] = []
+
+    async def call_tool(self, name: str, arguments: dict):
+        self.calls.append((name, arguments))
+        return self._result
+
+
+async def test_call_tool_result_structured_content_is_used_as_the_dict() -> None:
+    """도구 서버의 dict 반환값은 FastMCP 가 structured_content 에 그대로
+    담는다 — 그게 있으면 그대로 신뢰한다."""
+    result = _FakeCallToolResult(
+        structured_content={"ok": False, "detail": "1 failed", "exit_code": 1}
+    )
+    bridge = ToolBridge(_RealisticSession(result), "REQ-7", ["run_tests"])
+    out = await bridge.call("run_tests", {})
+    assert out == {"ok": False, "detail": "1 failed", "exit_code": 1}
+
+
+async def test_call_tool_result_without_structured_content_falls_back_to_text_and_is_error() -> None:
+    """structured_content 가 없으면 content 텍스트와 is_error 로 최선의
+    dict 를 만든다."""
+    result = _FakeCallToolResult(structured_content=None, content=[_TextBlock("boom")], is_error=True)
+    bridge = ToolBridge(_RealisticSession(result), "REQ-7", ["run_tests"])
+    out = await bridge.call("run_tests", {})
+    assert out == {"ok": False, "detail": "boom"}
+
+
+async def test_call_tool_dict_passthrough_still_works() -> None:
+    """단순 dict 를 돌려주는 테스트 더블(기존 _FakeSession)은 그대로 통과한다."""
+    session = _FakeSession()
+    bridge = ToolBridge(session, "REQ-7", ["write_file"])
+    out = await bridge.call("write_file", {"path": "a.py", "content": "x"})
+    assert out == {"ok": True, "detail": "done"}

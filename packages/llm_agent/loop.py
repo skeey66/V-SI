@@ -10,7 +10,11 @@
 적용된다 — 모델이 자기 역할에 없는 도구를 부르거나(흔한 8B 모델의 실수),
 `ollama.py` 가 파싱하지 못한 tool_call 을 `__malformed_tool_call__` 센티널로
 바꿔치기했을 때(그 이름은 어떤 허용 목록에도 없다) 모두 여기서 잡아 메시지로
-되돌린다. 이 파일에는 그 예외가 대화 루프를 벗어나 죽이는 경로가 없다.
+되돌린다. **`bridge.call` 이 던질 수 있는 다른 모든 예외도 마찬가지다** —
+끊긴 MCP 세션, 시간 초과, 네트워크 오류 같은 것이 허용 목록 위반보다 실제로
+훨씬 흔하다. 이 파일에는 `bridge.call` 의 어떤 예외도 대화 루프를 벗어나
+죽이는 경로가 없다. 도구 결과가 (버그로) dict 가 아니거나 `json` 이 그대로
+못 삼키는 값을 담고 있어도 마찬가지로 죽지 않는다.
 
 `OllamaUnavailable` (대개 모델이 아직 로딩 중이라 겪는, 로컬에서 재시도하면
 풀리는 상태)는 이 루프 안에서 백오프를 두고 재시도한다 — 오케스트레이터
@@ -25,6 +29,19 @@
 (`asyncio.wait_for`) 예산을 사실상 집행 지점으로 만든다. 그래서 이 루프는
 오케스트레이터의 900초 천장(죽은 프로세스만 잡기 위한 것)보다 먼저, 신뢰성
 있게 끝난다.
+
+**같은 패턴을 도구 호출에도 대칭으로 적용한다.** 응답 하나에 도구 호출이
+여러 개 들어올 수 있고(모델이 몇 개를 담을지는 이 루프가 정하지 않는다),
+`while` 의 다음 반복까지는 그 도구 호출들을 하나도 거르지 않고 다 돈다 —
+그 반복 시작 시점의 예산 검사만 믿으면 응답 하나가 예산을 몇 배로 넘길 수
+있다. 그래서 `bridge.call` 하나하나 앞에서 남은 예산을 다시 재고, 이미
+바닥났으면 그 자리에서 `LoopFailed` 로 끝낸다(같은 응답의 나머지 호출은
+아예 시도하지 않는다). 남은 예산이 있으면 호출 자체도 그 예산으로 감싼다 —
+멈춘 도구 호출 하나가 그 예산을 다 태우면 `chat()` 과 마찬가지로 잘린다.
+다만 그 잘림은 예외가 아니라 도구 메시지로 대화에 들어간다 — 이미 모델의
+`tool_calls` 턴이 시작된 뒤라 되돌릴 대화가 있고, 모델이 그걸 보고 반응할
+기회를 얻는다(바로 다음 도구 호출이나 다음 `while` 반복에서 예산이 이미
+바닥났다는 걸 어차피 잡아낸다).
 
 검증자의 `verdict` 는 도구 종료코드에서만 온다 (스펙 §5.3). 모델 응답 텍스트는
 `summary` 로만 들어가고 판정에 영향을 주지 않는다 — 이 파일에 그 경로가 없다.
@@ -105,6 +122,12 @@ async def _chat_with_retry(
             if remaining <= 0:
                 raise LoopFailed(_budget_exceeded_message(budget_s)) from None
             await sleep(min(_OLLAMA_RETRY_BACKOFFS_S[attempt - 1], remaining))
+        except Exception as exc:
+            # `OllamaUnavailable` 이 아닌 다른 chat() 실패(404 같은 설정 실수,
+            # 응답을 JSON 으로 못 읽는 경우 등)는 로컬 재시도로 풀리지 않는다.
+            # 여기서 한 번에 `LoopFailed` 로 바꿔서, 이 루프를 나가는 실패
+            # 타입을 하나로 유지한다.
+            raise LoopFailed(f"Ollama 호출이 실패했다: {exc}") from exc
 
     raise LoopFailed(f"Ollama 를 {attempts}번 시도했지만 계속 쓸 수 없었다: {last_exc}")
 
@@ -122,6 +145,43 @@ def _tool_error_result(name: str, arguments: dict, exc: ToolNotAllowed) -> dict:
     else:
         detail = str(exc)
     return {"ok": False, "detail": detail}
+
+
+def _bridge_exception_result(name: str, exc: Exception) -> dict:
+    """`ToolNotAllowed` 이외의 `bridge.call` 예외(끊긴 세션, 네트워크 오류
+    등)도 도구 실행 실패와 같은 모양으로 바꾼다."""
+    return {"ok": False, "detail": f"'{name}' 호출이 예외로 끝났다: {exc}"}
+
+
+async def _call_tool(
+    bridge,
+    name: str,
+    arguments: dict,
+    *,
+    now: Callable[[], float],
+    started: float,
+    budget_s: float,
+) -> dict:
+    """`bridge.call` 을 호출하되, `chat()` 과 대칭인 예산 집행을 적용한다.
+
+    예산이 이미 바닥났으면 즉시 `LoopFailed` 다 — 다음 `while` 반복까지
+    기다리면 같은 응답에 남은 호출들이 예산을 몇 배로 넘길 수 있다. 예산이
+    남아 있으면 호출 자체도 그 남은 예산으로 감싼다. 그 안에서 나는 다른
+    모든 실패(허용되지 않은 도구, 시간 초과, 세션 예외, 네트워크 오류 등)는
+    예외가 아니라 도구 메시지로 바뀐다 — 모델이 보고 고칠 기회를 갖는다
+    (스펙 §6.1).
+    """
+    remaining = budget_s - (now() - started)
+    if remaining <= 0:
+        raise LoopFailed(_budget_exceeded_message(budget_s))
+    try:
+        return await asyncio.wait_for(bridge.call(name, arguments), timeout=remaining)
+    except TimeoutError:
+        return {"ok": False, "detail": f"'{name}' 호출이 남은 예산 안에 끝나지 않았다"}
+    except ToolNotAllowed as exc:
+        return _tool_error_result(name, arguments, exc)
+    except Exception as exc:
+        return _bridge_exception_result(name, exc)
 
 
 async def run_loop(
@@ -168,10 +228,13 @@ async def run_loop(
             ]}
         )
         for call in reply.tool_calls:
-            try:
-                result = await bridge.call(call.name, call.arguments)
-            except ToolNotAllowed as exc:
-                result = _tool_error_result(call.name, call.arguments, exc)
+            result = await _call_tool(
+                bridge, call.name, call.arguments, now=now, started=started, budget_s=budget_s,
+            )
+            if not isinstance(result, dict):
+                # 브리지가 계약(-> dict)을 어겨도 여기서 죽지 않는다 — 근거
+                # 없는 통과를 만들 수는 없으니 실패로 취급한다.
+                result = {"ok": False, "detail": f"도구가 dict 가 아닌 값을 돌려줬다: {result!r}"}
             if on_tool is not None:
                 on_tool(call.name, call.arguments, result)
             if role.is_verifier and call.name == role.verdict_tool:
@@ -179,7 +242,7 @@ async def run_loop(
                 verdict_detail = result.get("detail", "")
             messages.append(
                 {"role": "tool", "name": call.name,
-                 "content": json.dumps(result, ensure_ascii=False)}
+                 "content": json.dumps(result, ensure_ascii=False, default=str)}
             )
 
     if role.is_verifier and verdict_exit_code is None:

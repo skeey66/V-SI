@@ -14,10 +14,22 @@
 센티널) 도 예외 없이 걸러낸다 — 그 이름은 어떤 허용 목록에도 없으므로
 `ToolNotAllowed` 를 받는다. 이는 의도된 동작이다. 이 예외를 모델이 읽을 수
 있는 피드백으로 바꾸는 일은 대화 루프 과제의 책임이며, 여기서는 하지 않는다.
+
+**`call()` 은 자기 타입 표기(`-> dict`)를 스스로 지킨다.** 실제 MCP SDK 의
+`ClientSession.call_tool()` 은 `CallToolResult` 객체를 돌려주지, dict 를
+돌려주지 않는다. 이 변환이 다른 파일(예: 세션 래퍼)에 있으면 계약이 두
+군데로 쪼개진다 — 이 타입 표기를 낸 파일이 직접 지키는 것이 맞다.
+`services/tool_server/main.py` 의 도구 함수는 항상 `{"ok": ..., "detail":
+..., ["exit_code": ...]}` 모양을 돌려주고, FastMCP 는 그것을 그대로
+`structured_content` 에 담으므로 있으면 그것을 신뢰한다. 없으면(오래된
+클라이언트 호환 경로거나 도구 자체가 크래시해 MCP 프로토콜 오류가 된 경우)
+`content` 블록의 텍스트와 `is_error` 로 최선의 dict 를 만든다. 이미 dict 를
+돌려주는 테스트 더블은 그대로 통과시킨다.
 """
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 #: 모델에게 절대 노출하지 않는 인자.
 _HIDDEN_ARGS = frozenset({"requirement_id"})
@@ -59,6 +71,34 @@ def tool_schemas(names: Sequence[str], raw: Sequence[dict]) -> list[dict]:
     return out
 
 
+def _content_text(content: Any) -> str:
+    """`CallToolResult.content` 블록들에서 사람이 읽을 텍스트를 모은다."""
+    if not content:
+        return ""
+    texts = []
+    for block in content:
+        text = getattr(block, "text", None)
+        if text is None and isinstance(block, dict):
+            text = block.get("text")
+        if text:
+            texts.append(str(text))
+    return "\n".join(texts)
+
+
+def _call_result_to_dict(result: Any) -> dict:
+    """MCP `CallToolResult` (또는 이미 dict 인 테스트 더블)를 이 브리지가
+    약속한 `dict` 로 만든다."""
+    if isinstance(result, dict):
+        return result
+    structured = getattr(result, "structured_content", None)
+    if isinstance(structured, dict):
+        return structured
+    return {
+        "ok": not getattr(result, "is_error", False),
+        "detail": _content_text(getattr(result, "content", None)),
+    }
+
+
 class ToolBridge:
     def __init__(self, session, requirement_id: str, allowed: Sequence[str]) -> None:
         self._session = session
@@ -70,4 +110,5 @@ class ToolBridge:
             raise ToolNotAllowed(f"'{name}' is not allowed for this role")
         # 세션 값이 마지막에 들어가 모델이 넣은 값을 덮는다.
         args = {**arguments, "requirement_id": self._requirement_id}
-        return await self._session.call_tool(name, args)
+        raw = await self._session.call_tool(name, args)
+        return _call_result_to_dict(raw)
