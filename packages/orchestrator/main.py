@@ -84,6 +84,10 @@ reconciler = Reconciler(
     # stale_after_s보다 한 자릿수 이상 크게 잡아 정상적으로 느린 실행을
     # 강제로 끊지 않는다.
     stuck_after_s=float(os.environ.get("VSI_RECONCILE_STUCK_S", DEFAULT_STUCK_AFTER_S)),
+    # Task 11: 요구사항 전체 시간 예산 backstop. `VSI_TIMEOUT_RUN_S`(policy.py)와
+    # 같은 값을 쓴다 — 같은 예산을 두 곳에서 서로 다른 env var로 따로
+    # 설정하게 두면 운영 중 둘이 어긋나기 쉽다.
+    run_s=float(timeouts.run_s),
 )
 
 app = FastAPI(title="v-si orchestrator")
