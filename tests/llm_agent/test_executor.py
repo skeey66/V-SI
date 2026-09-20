@@ -350,6 +350,39 @@ async def test_mcp_session_uses_real_snake_case_attribute(monkeypatch) -> None:
     assert captured["role"].name == "dev"
 
 
+async def test_mcp_connect_is_bounded_by_a_timeout(monkeypatch) -> None:
+    """`run_loop`의 600초 예산은 연결 절차가 끝난 뒤에야 시작한다 — 연결
+    자체(스트림 연결·`initialize`·`list_tools`)에 상한이 없으면 총
+    wall-clock 은 `연결 대기(무한) + 600초`가 되어, 오케스트레이터의 900초
+    천장(스펙 §9.2, "죽은 프로세스만 잡는다")이 "워크스페이스가 느리게 뜬
+    것"과 "MCP 서버가 죽은 것"을 구분하지 못하게 된다. 여기서는 연결 절차를
+    아주 짧은 타임아웃으로 덮어써서, 멈춘 연결이 유한 시간 안에 확정
+    실패로 끝난다는 것만 확인한다(실제 운영 값은 `llm_agent.executor` 모듈의
+    상수가 결정한다)."""
+    import asyncio
+
+    from llm_agent import executor as executor_module
+
+    @asynccontextmanager
+    async def hanging_streamable_http_client(url):
+        await asyncio.sleep(999)
+        yield (None, None)  # pragma: no cover - 절대 도달하지 않는다
+
+    monkeypatch.setattr(
+        "llm_agent.executor.streamable_http_client", hanging_streamable_http_client
+    )
+    monkeypatch.setattr(executor_module, "MCP_CONNECT_TIMEOUT_S", 0.05)
+
+    ex = _new_executor()
+    started = asyncio.get_event_loop().time()
+    with pytest.raises(executor_module.McpConnectTimeout) as exc_info:
+        await ex.run_task({"requirement_id": "REQ-1"})
+    elapsed = asyncio.get_event_loop().time() - started
+
+    assert elapsed < 1.0
+    assert "http://y/mcp/dev/" in str(exc_info.value)
+
+
 async def test_mcp_endpoint_missing_required_tool_is_a_loud_configuration_error(monkeypatch) -> None:
     """dev 가 실수로 `/mcp/qa/` 에 연결되면(`write_file` 없음), 빈/모자란
     스키마로 조용히 넘어가면 안 된다.
