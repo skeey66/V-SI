@@ -100,10 +100,16 @@ FORCE_FAIL = "force_fail"  # PROBE로도 안 끝난다 — 더 묻지 않고 실
 
 DEFAULT_INTERVAL_S = 2.0
 DEFAULT_STALE_AFTER_S = 5.0
-#: 이보다 오래 열린 채면 에이전트 응답을 더 기다리지 않는다(SDK 결함 안전망).
-#: `stale_after_s`보다 한 자릿수 이상 커야 한다 — 정상적으로 느린 실행까지
-#: 강제로 끊으면 안 되고, SDK가 종료 상태를 영영 안 줄 때만 걸려야 한다.
-DEFAULT_STUCK_AFTER_S = 60.0
+#: 열린 행의 나이 천장. SP1 은 60초였다 — 스텁이 초 단위로 끝났기 때문이다.
+#: SP2 의 LLM 작업은 몇 분이 기본이라 60초를 두면 **정상 작업이 전부 강제
+#: 실패당한다**(SP1 스펙 §12.3 이 경고한 그대로다). 에이전트가 자기 예산
+#: 600초를 스스로 집행하므로(스펙 §9.2), 이 천장은 그보다 큰 값으로 두어
+#: "느린 작업"이 아니라 "죽은 프로세스"만 잡게 한다.
+DEFAULT_STUCK_AFTER_S = 900.0
+#: `Reconciler`를 `run_s`를 지정하지 않고 만드는 테스트(`test_operational_
+#: signals.py`)를 위한 기본값일 뿐이다 — 운영에서는 항상 `main.py`가
+#: `timeouts.run_s`(policy.TimeoutConfig, 기본 3600초)를 명시적으로 넘긴다.
+DEFAULT_RUN_S = 3600.0
 
 
 @dataclass(frozen=True)
@@ -161,12 +167,29 @@ def next_action(
     now: datetime,
     stale_after_s: float,
     stuck_after_s: float,
+    run_s: float,
 ) -> Action | None:
     """관측에서 다음 동작 하나를 고른다. 순수 함수 — 부수 효과가 없다.
 
     `now`는 **DB 서버 시계**여야 한다(행의 시각도 전부 DB가 찍는다). 호스트와
     컨테이너의 시계 차이가 staleness 판정에 섞이면 조용히 오작동한다.
     """
+    # 요구사항 전체 시간 예산. SP1 은 배선하지 않았다(스펙 SP1 §12.2) —
+    # 스텁은 초 단위로 끝나 시간 축 규칙이 필요 없었기 때문이다. SP2 에서
+    # 실제 LLM 지연이 붙어 "느린 것"과 "멈춘 것"을 나이만으로 가르기 어려워졌고,
+    # 그래서 요구사항에도 상한이 필요해졌다.
+    #
+    # 다른 어떤 판단보다 먼저 검사한다 — 아래의 ACTIVE 게이트나
+    # `stale_after_s` 프레시니스 체크보다도 앞선다. 예산을 다 쓴 요구사항은
+    # 디스패치도 PROBE도 REMEDIATE도 받아서는 안 된다는 것이 이 backstop의
+    # 전제이고, "최근에 뭔가 움직였다"(stale_after_s 안쪽)는 사실이 있어도
+    # 총 예산을 넘겼다는 사실을 덮지 못한다 — run_s는 유휴 시간이 아니라
+    # 전체 소요 시간의 상한이다. (실제로는 `reconcile_once`가 이미 ACTIVE
+    # 상태의 요구사항만 걸러 넘기므로 종료 상태 행이 이 분기에 닿을 일은
+    # 없지만, 순수 함수로서의 보장을 호출자의 사전 필터링에 기대지 않는다.)
+    if (now - req.created_at).total_seconds() > run_s:
+        return Action(GIVE_UP)
+
     state = RequirementState(req.state)
     if state not in ACTIVE:
         return None
@@ -227,12 +250,14 @@ class Reconciler:
         interval_s: float = DEFAULT_INTERVAL_S,
         stale_after_s: float = DEFAULT_STALE_AFTER_S,
         stuck_after_s: float = DEFAULT_STUCK_AFTER_S,
+        run_s: float = DEFAULT_RUN_S,
     ) -> None:
         self._sm = session_maker
         self._engine = engine
         self._interval = interval_s
         self._stale_after = stale_after_s
         self._stuck_after = stuck_after_s
+        self._run_s = run_s
         # 운영 신호 1(Task 14): 같은 task_id가 PROBE된 반복 횟수. a2a-sdk 1.1.2가
         # 종료 전이를 누락하면(리컨실러 docstring 참고) 이 값이 매 주기 계속
         # 올라간다 — "PROBE가 비정상적으로 오래 반복된다"는 그 자체로는 로그를
@@ -296,7 +321,7 @@ class Reconciler:
                 )
             ).scalars().all()
             action = next_action(
-                req, list(rows), now, self._stale_after, self._stuck_after
+                req, list(rows), now, self._stale_after, self._stuck_after, self._run_s
             )
 
         if action is None:
