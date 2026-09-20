@@ -298,7 +298,14 @@ def _capture_write(files: dict[str, str], arguments: dict) -> bool:
         overflow = total - FILE_SNAPSHOT_TOTAL_CAP_BYTES
         current_raw = files[path].encode("utf-8", errors="replace")
         keep = max(0, len(current_raw) - overflow)
-        files[path] = current_raw[:keep].decode("utf-8", errors="replace")
+        if keep == 0:
+            # 스냅샷이 이미 포화됐다. 여기서 빈 문자열을 넣으면 payload 가
+            # "이 파일을 빈 내용으로 썼다"고 **적극적으로 거짓말**하게 된다 —
+            # 에이전트가 실제로 빈 파일을 쓴 경우와 구별할 수 없다. 기록을
+            # 아예 빼는 쪽이 정직하다. 잘렸다는 사실은 `files_truncated` 가 알린다.
+            files.pop(path, None)
+        else:
+            files[path] = current_raw[:keep].decode("utf-8", errors="replace")
         truncated = True
     return truncated
 
