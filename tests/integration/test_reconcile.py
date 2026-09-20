@@ -46,6 +46,14 @@ VERDICTS_FAIL_TWICE = "scenarios/verdicts_fail_twice.yaml"
 
 RECOVERY_TIMEOUT_S = 90.0
 
+#: kill 지점에 도달할 때까지의 대기. `run_scenario` 가 시작하며 `reset_agents` 로
+#: **에이전트 컨테이너 4개를 재생성**하므로, 이 예산에는 요구사항 실행뿐 아니라
+#: 그 재생성 시간이 통째로 들어간다. 원래 60초였는데 SP2 가 `workspace` 를 더해
+#: 스택이 11개 서비스가 되면서 전체 스위트 부하에서 간헐적으로 넘겼다(실측).
+#: 하네스의 `BOOT_TIMEOUT_S`(120초)가 "kill·재기동을 반복하면 도커가 느려진다
+#: (실측 60초 초과)"를 근거로 잡힌 값이므로 같은 기준에 맞춘다.
+KILL_POINT_TIMEOUT_S = 120.0
+
 
 @pytest.fixture(scope="module")
 def anyio_backend() -> str:  # pragma: no cover - asyncio_mode=auto용 안전장치
@@ -354,7 +362,7 @@ async def test_orchestrator_sigkill_mid_run_still_completes(point, predicate) ->
     run = asyncio.create_task(run_scenario(VERDICTS_FAIL_TWICE, rid, "회원가입"))
     try:
         at_kill = await wait_for(
-            rid, predicate, timeout_s=60.0, what=f"kill 지점 {point}"
+            rid, predicate, timeout_s=KILL_POINT_TIMEOUT_S, what=f"kill 지점 {point}"
         )
         # kill이 종료 뒤에 도착하면 이 테스트는 아무것도 시험하지 않는다.
         assert at_kill.state not in TERMINAL, f"{point}: 이미 끝난 뒤였다"
@@ -391,7 +399,7 @@ async def test_result_matches_uninterrupted_run() -> None:
         at_kill = await wait_for(
             rid,
             lambda r: any(t.agent == "planner" for t in r.tasks),
-            timeout_s=60.0,
+            timeout_s=KILL_POINT_TIMEOUT_S,
             what="planner 디스패치",
         )
         assert at_kill.state not in TERMINAL, "kill이 종료 뒤에 도착했다"
