@@ -29,6 +29,7 @@ from orchestrator.idempotency import idempotency_key
 from orchestrator.models import WorkflowRequirement, WorkflowTask
 from orchestrator.workflow import TERMINAL, RequirementState
 from tests.integration.harness import (
+    BOOT_TIMEOUT_S,
     ScenarioResult,
     db_session,
     kill_orchestrator,
@@ -46,13 +47,22 @@ VERDICTS_FAIL_TWICE = "scenarios/verdicts_fail_twice.yaml"
 
 RECOVERY_TIMEOUT_S = 90.0
 
-#: kill 지점에 도달할 때까지의 대기. `run_scenario` 가 시작하며 `reset_agents` 로
-#: **에이전트 컨테이너 4개를 재생성**하므로, 이 예산에는 요구사항 실행뿐 아니라
-#: 그 재생성 시간이 통째로 들어간다. 원래 60초였는데 SP2 가 `workspace` 를 더해
-#: 스택이 11개 서비스가 되면서 전체 스위트 부하에서 간헐적으로 넘겼다(실측).
-#: 하네스의 `BOOT_TIMEOUT_S`(120초)가 "kill·재기동을 반복하면 도커가 느려진다
-#: (실측 60초 초과)"를 근거로 잡힌 값이므로 같은 기준에 맞춘다.
-KILL_POINT_TIMEOUT_S = 120.0
+#: kill 지점에 도달할 때까지의 대기.
+#:
+#: `wait_for` 는 `run_scenario` 와 **동시에** 돈다. 그런데 `run_scenario` 는
+#: 워크플로를 시작하기 전에 `reset_agents` 로 에이전트 컨테이너 4개를 재생성하고
+#: `_wait_healthy(BOOT_TIMEOUT_S)` 로 기다린다. 즉 이 예산에는 부팅이 통째로
+#: 들어간다 — 원래 값 60초는 촉박한 정도가 아니라 **하네스가 스스로 합법이라고
+#: 선언한 부팅 시간(120초) 안에서 구조적으로 충족 불가능**했다. 전체 스위트
+#: 부하에서 간헐적으로 터진 이유가 이것이다(실측).
+#:
+#: `BOOT_TIMEOUT_S` 를 그대로 쓰지 않고 여유를 더하는 이유: 그 값과 같게 두면
+#: 부팅이 허용된 예산을 다 쓰는 순간 이 대기도 같은 시점에 만료돼 같은 결함이
+#: 확률만 낮춘 채 남는다. 상수를 임포트해 결합을 눈에 보이게 한다.
+#:
+#: 이 대기는 부팅 시간이 지배하므로 **디스패치 지연 회귀를 잡지 못한다** —
+#: 살아있음(liveness) 가드로만 읽어야 한다.
+KILL_POINT_TIMEOUT_S = BOOT_TIMEOUT_S + 60.0
 
 
 @pytest.fixture(scope="module")
