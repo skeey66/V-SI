@@ -56,6 +56,7 @@ export function AgentGraph() {
     events,
     activeAgents,
     lastResult,
+    activity,
     revision,
     requirementState,
     reworkPulse,
@@ -150,9 +151,15 @@ export function AgentGraph() {
               />
             )}
 
-            <AgentNode id="orchestrator" active={false} result={undefined} />
+            <AgentNode id="orchestrator" active={false} result={undefined} activity={undefined} />
             {AGENT_IDS.map((id) => (
-              <AgentNode key={id} id={id} active={activeAgents.has(id)} result={lastResult[id]} />
+              <AgentNode
+                key={id}
+                id={id}
+                active={activeAgents.has(id)}
+                result={lastResult[id]}
+                activity={activeAgents.has(id) ? activity[id] : undefined}
+              />
             ))}
 
             {revision > 1 && (
@@ -221,10 +228,13 @@ function AgentNode({
   id,
   active,
   result,
+  activity,
 }: {
   id: NodeId;
   active: boolean;
   result: { kind: string; detail?: string } | undefined;
+  /** tool_result에서 온 현재 도구 이름 — 자문 정보라 상태에는 영향이 없다. */
+  activity: string | undefined;
 }) {
   const n = NODES[id];
   const ringColor =
@@ -256,10 +266,16 @@ function AgentNode({
       <text x={n.x} y={n.y + radius + 14} textAnchor="middle" className="vsi-node-label">
         {n.label}
       </text>
-      {result?.detail && (
-        <text x={n.x} y={n.y + radius + 25} textAnchor="middle" className="vsi-node-sub">
-          {result.detail}
+      {activity ? (
+        <text x={n.x} y={n.y + radius + 25} textAnchor="middle" className="vsi-node-activity">
+          {activity}
         </text>
+      ) : (
+        result?.detail && (
+          <text x={n.x} y={n.y + radius + 25} textAnchor="middle" className="vsi-node-sub">
+            {result.detail}
+          </text>
+        )
       )}
     </g>
   );
