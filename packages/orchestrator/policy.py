@@ -23,9 +23,11 @@
 어려워졌고, 열린 행이 아니라 **요구사항 전체**의 시간 축에 별도의 상한이
 필요해졌다. 그래서 `run_s`는 `stuck_after_s`·재시도 캡과 **같은 축**(관측된
 나이)에 얹히는 backstop으로 리컨실러에 배선했다 — 서로 다른 기준을 두 곳에
-두는 문제를 반복하지 않는다(`reconciler.next_action`이 요구사항 나이가
-`run_s`를 넘겼는지를 다른 무엇보다 먼저 검사하고, 넘겼으면 다른 판단으로
-넘어가지 않는다).
+두는 문제를 반복하지 않는다. 다만 전면적인 backstop은 아니다:
+`reconciler.next_action`은 예산 초과를 새 일을 만드는 결정(DISPATCH·PROBE·
+REMEDIATE)보다는 먼저 보되, 이미 끝난 일(FINISH·ADVANCE)이나 SDK 결함
+안전망(FORCE_FAIL)보다 앞세우지는 않는다 — 예산은 새 일을 막을 뿐 이미 끝난
+일을 버리지 않는다.
 """
 
 from __future__ import annotations
