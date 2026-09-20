@@ -859,6 +859,48 @@ class WorkflowEngine:
                 requirement_id, observed.value,
             )
 
+    async def give_up_on_budget(self, requirement_id: str) -> None:
+        """요구사항 전체 시간 예산(`run_s`)을 넘긴 요구사항을 강제로 포기시킨다.
+
+        (Task 11 리뷰 라운드 1) `give_up`과 근거가 다르다 — `give_up`은 "이
+        에이전트의 재시도 예산이 바닥났다"는, 특정 실패 행에서 나오는 관측을
+        실행한다. `run_s` backstop은 특정 행이 아니라 요구사항이 태어난 뒤로
+        흐른 시간 자체가 근거이므로, 원인이 된 실패 행이 아예 없을 수 있다 —
+        예를 들어 REMEDIATING인데 이번 회차의 dev Task가 아직 하나도 없는
+        채로 전체 예산을 다 쓴 경우. 그래서 이 메서드는 `agent`도
+        `failure_class`도 요구하지 않는다.
+
+        `give_up`은 REMEDIATING을 일부러 건너뛴다(`remediate`의 회차 상한
+        소관이라서다) — 하지만 `remediate`의 회차 상한은 "Task 행 개수"를
+        보므로 시간 축과는 별개다. 시간 예산은 네 ACTIVE 상태 모두에서 똑같이
+        걸려야 하고, `LIMIT_EXCEEDED`는 그 넷 전부에서 ESCALATED로 가는 합법
+        전이다(`workflow.py`) — 그래서 여기서는 관측한 상태를 그대로
+        `expected`로 넘겨 네 상태 어디서 불려도 동작한다.
+        """
+        async with self._sm() as s:
+            req = await s.get(WorkflowRequirement, requirement_id)
+        if req is None:
+            return
+        observed = RequirementState(req.state)
+        if observed not in (
+            RequirementState.PLANNED,
+            RequirementState.IMPLEMENTING,
+            RequirementState.VERIFYING,
+            RequirementState.REMEDIATING,
+        ):
+            return  # 이미 종료 상태다 — 다른 경로가 먼저 끝냈다.
+        transitioned = await self._transition(
+            requirement_id,
+            WorkflowSignal.LIMIT_EXCEEDED,
+            expected=observed,
+            extra={"reason": "run_budget_exceeded", "revision": req.revision},
+        )
+        if not transitioned:
+            logger.info(
+                "예산 초과 포기 전이를 건너뛴다: %s는 %s를 기대했으나 이미 움직였다",
+                requirement_id, observed.value,
+            )
+
     # ------------------------------------------------------------------ 조회
 
     async def state_of(self, requirement_id: str) -> RequirementState:

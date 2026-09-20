@@ -38,7 +38,7 @@ from orchestrator.db import make_engine
 from orchestrator.engine import WorkflowEngine
 from orchestrator.models import WorkflowRequirement, WorkflowTask
 from orchestrator.policy import TimeoutConfig
-from orchestrator.reconciler import ADVANCE, FORCE_FAIL, PROBE, Action, Reconciler
+from orchestrator.reconciler import ADVANCE, FORCE_FAIL, GIVE_UP, PROBE, Action, Reconciler
 from orchestrator.workflow import RequirementState
 
 TEST_DB_URL = os.environ.get(
@@ -186,5 +186,87 @@ async def test_transition_skip_emits_a_counting_event(spans, session) -> None:
         assert first["vsi.expected_state"] == "planned"
         assert first["vsi.actual_state"] == "implementing"
         assert first["vsi.signal"] == "plan_ready"
+    finally:
+        await db.dispose()
+
+
+# ------------------------------------------------ Task 11 리뷰 라운드 1 회귀
+
+
+async def test_give_up_with_no_tasks_still_escalates_the_requirement(session) -> None:
+    """`run_s` backstop이 실제로 요구사항을 끝내는지 **DB 부수효과**로 고정한다.
+
+    처음 구현은 `Action(GIVE_UP)`을 `tasks=()`인 채로 돌려줬고, `_execute`의
+    GIVE_UP 분기는 `for task in action.tasks: ... engine.give_up(...)`뿐이었다
+    — 빈 튜플이면 루프 본문이 한 번도 안 돌아 `engine.give_up`이 전혀
+    불리지 않는다(리뷰가 실측: 호출 0회). 그러면 리컨실러는 매 주기 "→
+    give_up"을 로그로 남기면서도 요구사항을 영원히 ACTIVE에 방치한다 — 이
+    파일의 다른 테스트들처럼 `next_action`이 돌려준 kind만 보면 이 회귀를
+    잡지 못한다(의도는 맞고 집행이 없었다). 네 ACTIVE 상태 전부에서
+    `give_up_on_budget`이 실제로 ESCALATED까지 전이시키는지 확인한다 —
+    `give_up`과 달리 REMEDIATING도 포함한다(시간 예산은 네 상태 모두에 걸린다).
+    """
+    db = make_engine(TEST_DB_URL)
+    maker = async_sessionmaker(db, expire_on_commit=False)
+    workflow = WorkflowEngine(maker, {}, TimeoutConfig.from_env({}))
+    rec = Reconciler(session_maker=maker, engine=workflow)
+    try:
+        for state in (
+            RequirementState.PLANNED,
+            RequirementState.IMPLEMENTING,
+            RequirementState.VERIFYING,
+            RequirementState.REMEDIATING,
+        ):
+            rid = f"REQ-BUDGET-{state.value}"
+            session.add(
+                WorkflowRequirement(
+                    requirement_id=rid, title="회원가입",
+                    state=state.value, revision=1, run_id=f"run-{rid}",
+                )
+            )
+            await session.commit()
+
+            await rec._execute(rid, Action(GIVE_UP), datetime.now(timezone.utc))
+
+            async with maker() as s:
+                req = await s.get(WorkflowRequirement, rid)
+                assert req.state == RequirementState.ESCALATED.value, (
+                    f"{state.value}에서 GIVE_UP(tasks=())이 요구사항을 끝내지 못했다"
+                )
+    finally:
+        await db.dispose()
+
+
+async def test_run_budget_end_to_end_escalates_remediating_with_zero_open_rows(
+    session,
+) -> None:
+    """리뷰가 지목한 정확한 시나리오 — `remediate` 중간에 죽어 이번 회차 Task가
+    0개인 REMEDIATING 요구사항이 `run_s`를 넘겼을 때, `next_action`부터
+    `Reconciler.reconcile_once`까지 전체 경로가 실제로 요구사항을 ESCALATED로
+    끝내는지 본다(단위 함수 하나가 아니라 배선 전체를 실제 DB로 검증한다).
+    """
+    rid = "REQ-BUDGET-E2E"
+    old = datetime.now(timezone.utc) - timedelta(hours=2)
+    session.add(
+        WorkflowRequirement(
+            requirement_id=rid, title="회원가입",
+            state=RequirementState.REMEDIATING.value, revision=2, run_id=f"run-{rid}",
+            created_at=old, updated_at=old,
+        )
+    )
+    await session.commit()
+
+    db = make_engine(TEST_DB_URL)
+    maker = async_sessionmaker(db, expire_on_commit=False)
+    workflow = WorkflowEngine(maker, {}, TimeoutConfig.from_env({}))
+    # 요구사항 나이(2시간)가 확실히 run_s(1시간)를 넘기게 잡는다.
+    rec = Reconciler(session_maker=maker, engine=workflow, stale_after_s=5.0, run_s=3600.0)
+    try:
+        reconciled = await rec.reconcile_once()
+        assert reconciled == 1
+
+        async with maker() as s:
+            req = await s.get(WorkflowRequirement, rid)
+            assert req.state == RequirementState.ESCALATED.value
     finally:
         await db.dispose()
