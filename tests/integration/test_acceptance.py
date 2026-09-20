@@ -282,6 +282,49 @@ async def test_completion_criterion_4_sigkill_then_restart_completes_without_int
 # --------------------------------------------------------- criterion 5
 
 
+def test_criterion_5_infra_scan_covers_dependency_and_deploy_files() -> None:
+    """criterion 5의 원래 스캔(`packages/`·`services`·`web/src`·
+    `web/package.json`)은 의존성 선언(`pyproject.toml`)이나 배포 설정
+    (`docker-compose.yml`/`Dockerfile`/`.env*`/CI 워크플로)을 안 본다 —
+    거기에 `openai`를 의존성으로 추가하거나 compose에 API 키를 박아도 원래
+    스캔은 못 잡는데, 기준 6은 "외부 LLM API 호출 **0회**"를 주장한다.
+
+    `_infra_files`가 실제로 이 파일들을 스캔 대상 목록에 담는지만 여기서
+    고정한다 — 내용 검사(금지어 없음) 자체는 `test_completion_criterion_5_
+    no_llm_calls` 본문이 같은 목록으로 한다(같은 스캔 규칙을 두 벌 두지
+    않는다). `REPO_ROOT` 아래 알려진 자리만 명시적으로 나열하는 이유는
+    SP1이 criterion-5에서 세운 관행과 같다 — 광범위한 재귀 스캔은
+    `.claude/worktrees/`(다른 브랜치의 스테일 체크아웃 사본)처럼 "이 브랜치가
+    배포하는 것"과 무관한 자리까지 쓸어 담을 수 있다."""
+    names = {p.name for p in _infra_files(REPO_ROOT)}
+    assert "pyproject.toml" in names, names
+    assert "docker-compose.yml" in names, names
+    assert "Dockerfile" in names, names
+    assert any(n.startswith(".env") for n in names), names
+    assert any(n.endswith(".yml") and n != "docker-compose.yml" for n in names), names
+
+
+def _infra_files(repo_root: pathlib.Path) -> list[pathlib.Path]:
+    """의존성 선언·배포 설정 중 criterion 5 의 원래 스캔(packages/services/
+    web) 밖에 있는 자리. `openai`를 `pyproject.toml`에 의존성으로 추가하거나
+    `docker-compose.yml`/`.env*`에 API 키를 박는 사고는 원래 스캔이 못 잡는다.
+
+    `REPO_ROOT` 바로 아래(그리고 `.github/workflows/`)에서 알려진 이름만
+    명시적으로 나열한다 — SP1이 criterion-5에서 세운 관행과 같다: 광범위한
+    재귀 스캔(`rglob`)은 `.claude/worktrees/`(다른 브랜치의 스테일 체크아웃
+    사본)나 `.git/` 같은, "이 브랜치가 배포하는 것"과 무관한 자리까지 쓸어
+    담아 오탐/과탐을 만들 수 있다. 이 시험 자신(`.py`)은 이 목록 어디에도
+    안 걸린다 — 자기 참조 문제가 애초에 없다."""
+    candidates = [
+        repo_root / "pyproject.toml",
+        repo_root / "docker-compose.yml",
+        repo_root / "Dockerfile",
+        *sorted(repo_root.glob(".env*")),
+        *sorted((repo_root / ".github" / "workflows").glob("*.yml")),
+    ]
+    return [p for p in candidates if p.is_file()]
+
+
 async def test_completion_criterion_5_no_llm_calls() -> None:
     """스텁은 LLM을 호출하지 않는다. 외부 LLM 엔드포인트 의존이 없음을 고정한다.
 
@@ -339,6 +382,18 @@ async def test_completion_criterion_5_no_llm_calls() -> None:
     )
     for token in ("anthropic", "openai"):
         assert token not in package_json, f"web/package.json에서 LLM 의존 발견: {token}"
+
+    # 의존성 선언·배포 설정도 스캔한다 — `pyproject.toml`에 `openai`를
+    # 추가하거나 `docker-compose.yml`/`Dockerfile`/`.env*`/CI 워크플로에
+    # API 키를 박아도 위 스캔들은 못 잡는다(경로가 다르다). `_infra_files`가
+    # 실제로 이 파일들을 담고 있다는 것 자체는
+    # `test_criterion_5_infra_scan_covers_dependency_and_deploy_files`가
+    # 따로 고정한다.
+    infra_files = _infra_files(REPO_ROOT)
+    assert len(infra_files) >= 5, f"인프라 스캔 대상이 비정상적으로 적다: {infra_files}"
+    infra_text = " ".join(p.read_text(encoding="utf-8") for p in infra_files)
+    for token in forbidden:
+        assert token not in infra_text.lower(), f"인프라 설정에서 LLM 의존 발견: {token}"
 
 
 # --------------------------------------------------------- criterion 6 (SP2 §13)
