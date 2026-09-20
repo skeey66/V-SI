@@ -35,6 +35,22 @@ class UnknownMode(ValueError):
     """`VSI_AGENT_MODE` 가 stub 도 llm 도 아니다."""
 
 
+def default_mcp_url(agent: str) -> str:
+    """`VSI_MCP_URL`이 없을 때 이 에이전트가 붙을 기본 MCP 엔드포인트.
+
+    도구 서버는 역할별로 `/mcp/<role>/`(끝 슬래시 포함)에 따로 마운트된다
+    (`services/tool_server/main.py`) — 모든 에이전트가 같은 URL을 보면
+    안 되고, 반드시 자기 자신의 역할 경로를 봐야 한다. 이 조합 로직은 원래
+    아래 `if "VSI_AGENT" in os.environ:` 가드 안에 인라인 f-string으로만
+    있었다 — uvicorn이 실제로 앱을 부팅할 때만 실행되고, 벌거벗은 `import
+    agent_entry.main`으로 도는 단위 테스트에서는 전혀 실행되지 않아 아무
+    시험도 이 조합을 검증하지 못했다. 이 배선이 실제로 어긋난 채(예: 모든
+    에이전트가 같은 URL로 붙음) 배포된 적이 있다 — 실측: 첫 디스패치에서
+    4개 에이전트 전부 HTTP 421을 받은 라이브 장애. 순수 함수로 뽑아
+    가드 밖에서 직접 부를 수 있게 한다."""
+    return f"http://workspace:8000/mcp/{agent}/"
+
+
 def build_executor(
     mode: str,
     agent: str,
@@ -96,7 +112,7 @@ if "VSI_AGENT" in os.environ:
         model=os.environ.get("VSI_MODEL", "qwen3:8b"),
         # 역할별 마운트(`/mcp/<role>/`)를 반영한다 — 단일 엔드포인트를 가정하면
         # 잘못된 역할에 연결되고, `LlmExecutor`가 `McpRoleMismatch`로 죽는다.
-        mcp_url=os.environ.get("VSI_MCP_URL", f"http://workspace:8000/mcp/{AGENT}/"),
+        mcp_url=os.environ.get("VSI_MCP_URL", default_mcp_url(AGENT)),
         session_maker=async_sessionmaker(engine, expire_on_commit=False),
     )
     app = create_agent_app(card, executor, task_store)
