@@ -45,6 +45,13 @@
 
 검증자의 `verdict` 는 도구 종료코드에서만 온다 (스펙 §5.3). 모델 응답 텍스트는
 `summary` 로만 들어가고 판정에 영향을 주지 않는다 — 이 파일에 그 경로가 없다.
+
+검증자가 판정 도구를 한 번도 안 부르고 턴을 끝내는 것도(예: qwen3:8b 가 도구
+호출 없이 텍스트만으로 답하고 끝낸 실제 관측 사례) 위와 같은 모양의 교정
+가능한 실수로 다룬다: 예외로 바로 죽이지 않고 "판정은 도구에서만 나온다"는
+계약을 메시지로 돌려주고 `MAX_VERDICT_NUDGES` 번까지 다시 턴을 준다. 그
+상한을 다 쓰고도 도구를 안 부르면 그제서야 `LoopFailed` 다 — 근거 없는
+판정을 만들지 않는다는 원칙은 그대로 지킨다.
 """
 from __future__ import annotations
 
@@ -75,6 +82,17 @@ TOOL_CALL_CAP_S = 90.0
 #: `ollama.py` 의 손상된 tool_call 센티널 이름과 같은 값이다. 그 모듈이
 #: private 상수(`_MALFORMED_TOOL_NAME`)로 두고 있어 여기서는 리터럴로 맞춘다.
 _MALFORMED_TOOL_NAME = "__malformed_tool_call__"
+
+#: 검증자가 판정 도구를 한 번도 안 부르고 턴을 끝냈을 때, 다시 기회를 주는
+#: 횟수의 상한. 이 값은 `max_turns` 와 별개로 작다 — `max_turns` 는 정상적인
+#: 도구 호출 반복(list_files → read_file → run_tests 같은) 을 감안해 넉넉히
+#: 잡혀 있는데, 그 예산을 "판정 도구를 아예 안 부른다"는 한 가지 실수를
+#: 봐주는 데 전부 쓰게 두면 안 된다. 매 nudge 는 `chat()` 을 한 번 더
+#: 부르므로(워밍업 상태에서도 12~15초) 시간 예산도 갉아먹는다. 2번이면
+#: "한 번은 안내문처럼 답하고 끝냈을 수도 있다"는 흔한 실수는 봐주면서도,
+#: 스스로 회복 못 하는 모델을 세 번째 시도에서 확정 실패시켜 나머지
+#: 에이전트(dev, 그리고 오케스트레이터의 재시도)에게 예산을 돌려준다.
+MAX_VERDICT_NUDGES = 2
 
 #: `OllamaUnavailable` 재시도 백오프(초). 총 4번의 대기로 약 30초를 채운다 —
 #: 브리핑에 나온 "모델 로딩은 대개 30초 걸린다"를 커버하면서, 영구적으로
@@ -164,6 +182,23 @@ def _bridge_exception_result(name: str, exc: Exception) -> dict:
     return {"ok": False, "detail": f"'{name}' 호출이 예외로 끝났다: {exc}"}
 
 
+def _verdict_nudge_message(role: Role) -> str:
+    """검증자가 판정 도구 없이 턴을 끝냈을 때 되돌려줄 계약 진술.
+
+    애원("제발 도구를 불러줘")이 아니라 계약을 적는다: 판정이 어디서
+    나오는지, 이번 턴에 무엇이 빠졌는지, 무엇을 해야 하는지. 모델이 읽고
+    고칠 수 있는 도구 오류 메시지와 같은 성격이다 (스펙 §6.1) — 다만 도구
+    실행이 실패한 게 아니라 도구를 아예 안 부른 것이므로 `role="tool"` 이
+    아니라 `role="user"` 로 넣는다.
+    """
+    return (
+        f"{role.name} 역할의 판정(PASS/FAIL)은 `{role.verdict_tool}` 도구의 "
+        f"종료코드에서만 나온다 — 텍스트로 적은 결론은 판정으로 치지 않는다. "
+        f"이번 턴에서 `{role.verdict_tool}` 을 호출하지 않았다. "
+        f"`{role.verdict_tool}` 을 호출해서 판정 근거를 만들어라."
+    )
+
+
 async def _call_tool(
     bridge,
     name: str,
@@ -225,6 +260,7 @@ async def run_loop(
     verdict_exit_code: int | None = None
     verdict_detail = ""
     turns = 0
+    verdict_nudges_used = 0
 
     while True:
         if turns >= max_turns:
@@ -238,6 +274,24 @@ async def run_loop(
         turns += 1
 
         if not reply.tool_calls:
+            # 검증자가 판정 도구를 한 번도 안 부르고 턴을 끝냈다 — 근거 없는
+            # 판정을 만들 수는 없지만(스펙 §5.3), 이는 다른 모든 교정 가능한
+            # 실수와 같은 모양이다: 도구 오류가 예외 대신 메시지가 되어
+            # 모델이 보고 고칠 기회를 얻는 것처럼(스펙 §6.1), "너는 검증자인데
+            # 판정 도구 없이 턴을 끝냈다"도 메시지로 돌려주고 다시 시도하게
+            # 한다. `max_turns`/`budget_s` 와 별개로 `MAX_VERDICT_NUDGES` 로
+            # 추가로 상한을 둔다 — 그러지 않으면 협조하지 않는 검증자 하나가
+            # 정상적인 도구 호출 반복을 감안해 넉넉히 잡힌 턴·시간 예산 전체를
+            # "판정 도구를 안 부른다"는 같은 실수를 반복하는 데 다 쓸 수 있다.
+            if (
+                role.is_verifier
+                and verdict_exit_code is None
+                and verdict_nudges_used < MAX_VERDICT_NUDGES
+            ):
+                verdict_nudges_used += 1
+                messages.append({"role": "assistant", "content": reply.content})
+                messages.append({"role": "user", "content": _verdict_nudge_message(role)})
+                continue
             break
 
         messages.append(

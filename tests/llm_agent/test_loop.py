@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from llm_agent.loop import LoopFailed, run_loop
+from llm_agent.loop import MAX_VERDICT_NUDGES, LoopFailed, run_loop
 from llm_agent.mcp_client import ToolNotAllowed
 from llm_agent.ollama import ChatReply, OllamaUnavailable, ToolCall
 from llm_agent.roles import ROLES
@@ -100,14 +100,102 @@ async def test_verifier_verdict_comes_from_exit_code_only() -> None:
 
 
 async def test_verifier_that_never_called_its_tool_fails() -> None:
-    """근거 없는 판정을 만들지 않는다 (스펙 §5.3)."""
-    llm = _ScriptedLlm([ChatReply(content="보아하니 괜찮다")])
+    """근거 없는 판정을 만들지 않는다 (스펙 §5.3). 정정 기회(nudge)를 다
+    써버린 뒤에도 여전히 도구를 안 부르면 실패로 끝난다."""
+    llm = _ScriptedLlm([ChatReply(content="보아하니 괜찮다")] * (MAX_VERDICT_NUDGES + 5))
     with pytest.raises(LoopFailed) as exc:
         await run_loop(
             role=ROLES["qa"], llm=llm, bridge=_RecordingBridge(),
             schemas=[], title="계산기", revision=1, feedback=[],
         )
     assert "도구" in str(exc.value)
+    # nudge 는 유한하다 — 원래 시도 1번 + nudge 횟수만큼만 chat() 이 불린다.
+    assert len(llm.seen) == MAX_VERDICT_NUDGES + 1
+
+
+async def test_verifier_gets_a_nudge_and_recovers_on_the_next_turn() -> None:
+    """검증자가 판정 도구를 안 부르고 턴을 끝내면, 예외 대신 계약을 알리는
+    메시지가 대화에 들어가고 모델은 다음 턴을 받는다."""
+    llm = _ScriptedLlm([
+        ChatReply(content="보아하니 통과다"),
+        ChatReply(tool_calls=[ToolCall("run_security_scan", {})]),
+        ChatReply(content="끝"),
+    ])
+    bridge = _RecordingBridge({"ok": True, "detail": "이상 없음", "exit_code": 0})
+    result = await run_loop(
+        role=ROLES["security"], llm=llm, bridge=bridge, schemas=[],
+        title="계산기", revision=1, feedback=[],
+    )
+    assert result.payload["verdict"] == "PASS"
+    assert bridge.calls[0][0] == "run_security_scan"
+    # 첫 응답(도구 미호출) 다음에 오간 메시지에 정정 계약이 들어 있어야 한다.
+    second_call_messages = llm.seen[1]
+    assert any(
+        m.get("role") == "assistant" and m.get("content") == "보아하니 통과다"
+        for m in second_call_messages
+    )
+    assert any(
+        m.get("role") == "user" and "run_security_scan" in str(m.get("content", ""))
+        for m in second_call_messages
+    )
+
+
+async def test_verdict_nudge_states_the_contract_not_a_plea() -> None:
+    """정정 메시지는 애원이 아니라 계약을 진술해야 한다 — 도구 이름과 '판정은
+    도구에서만 나온다'는 사실이 그대로 들어 있는지를 확인한다."""
+    llm = _ScriptedLlm([
+        ChatReply(content="괜찮아 보인다"),
+        ChatReply(tool_calls=[ToolCall("run_tests", {})]),
+    ])
+    bridge = _RecordingBridge({"ok": True, "detail": "ok", "exit_code": 0})
+    await run_loop(
+        role=ROLES["qa"], llm=llm, bridge=bridge, schemas=[],
+        title="계산기", revision=1, feedback=[],
+    )
+    nudge = next(
+        m for m in llm.seen[1]
+        if m.get("role") == "user" and "run_tests" in str(m.get("content", ""))
+    )
+    assert "run_tests" in nudge["content"]
+
+
+async def test_verdict_nudge_consumes_a_turn() -> None:
+    """nudge 도 실제로 모델을 한 번 부른 턴이다 (모델이 아예 안 돈 Ollama
+    재시도와 다르다) — `turns` 에 그대로 반영돼야 한다."""
+    llm = _ScriptedLlm([
+        ChatReply(content="괜찮아 보인다"),
+        ChatReply(tool_calls=[ToolCall("run_tests", {})]),
+    ])
+    bridge = _RecordingBridge({"ok": True, "detail": "ok", "exit_code": 0})
+    result = await run_loop(
+        role=ROLES["qa"], llm=llm, bridge=bridge, schemas=[],
+        title="계산기", revision=1, feedback=[],
+    )
+    # 1) nudge 유발 턴, 2) run_tests 를 부른 턴, 3) 도구 결과를 보고 끝내는 턴.
+    assert result.turns == 3
+
+
+async def test_verdict_nudge_respects_the_turn_cap() -> None:
+    """nudge 가 `max_turns` 상한 자체를 우회하면 안 된다."""
+    llm = _ScriptedLlm([ChatReply(content="괜찮다")] * 5)
+    with pytest.raises(LoopFailed) as exc:
+        await run_loop(
+            role=ROLES["qa"], llm=llm, bridge=_RecordingBridge(),
+            schemas=[], title="계산기", revision=1, feedback=[], max_turns=1,
+        )
+    assert "턴" in str(exc.value)
+
+
+async def test_non_verifier_is_never_nudged() -> None:
+    """dev/planner 는 도구를 안 부르고 끝내는 것 자체가 정상 종료다 — 검증자가
+    아니므로 nudge 경로를 타지 않는다."""
+    llm = _ScriptedLlm([ChatReply(content="설계만 하고 끝냈다")])
+    result = await run_loop(
+        role=ROLES["planner"], llm=llm, bridge=_RecordingBridge(), schemas=[],
+        title="계산기", revision=1, feedback=[],
+    )
+    assert result.turns == 1
+    assert len(llm.seen) == 1
 
 
 async def test_non_verifier_payload_has_no_verdict() -> None:
