@@ -61,6 +61,17 @@ from llm_agent.roles import Role, system_prompt, task_prompt
 MAX_TURNS = 12
 BUDGET_S = 600.0
 
+#: 도구 호출 하나의 상한(초). 남은 예산(수백 초일 수 있다)을 그대로 타임아웃
+#: 으로 쓰면, 멈춘 도구 호출 하나가 사실상 예산 전체를 태우고서야(그것도
+#: 예외가 아니라 메시지로) 끝난다 — 다음 `while` 반복의 예산 검사가 항상
+#: 먼저 걸려 그 메시지가 모델에게 갈 기회조차 없다. 그래서 `min(remaining,
+#: TOOL_CALL_CAP_S)` 로 짧게 자른다. 도구 서버의 `SUBPROCESS_TIMEOUT_S`(60초,
+#: `services/tool_server/tools.py`)가 정상적인 `run_tests`/`run_security_scan`
+#: 실행의 실질 상한이므로, MCP 왕복·직렬화 오버헤드를 감안한 여유를 더해
+#: 90초로 잡는다 — 정상적인 느린 호출은 여유 있게 끝나고, 진짜로 멈춘
+#: 호출은 600초 예산의 15% 안쪽에서 잘려 모델이 다음 턴을 받는다.
+TOOL_CALL_CAP_S = 90.0
+
 #: `ollama.py` 의 손상된 tool_call 센티널 이름과 같은 값이다. 그 모듈이
 #: private 상수(`_MALFORMED_TOOL_NAME`)로 두고 있어 여기서는 리터럴로 맞춘다.
 _MALFORMED_TOOL_NAME = "__malformed_tool_call__"
@@ -161,23 +172,29 @@ async def _call_tool(
     now: Callable[[], float],
     started: float,
     budget_s: float,
+    tool_call_cap_s: float,
 ) -> dict:
     """`bridge.call` 을 호출하되, `chat()` 과 대칭인 예산 집행을 적용한다.
 
     예산이 이미 바닥났으면 즉시 `LoopFailed` 다 — 다음 `while` 반복까지
     기다리면 같은 응답에 남은 호출들이 예산을 몇 배로 넘길 수 있다. 예산이
-    남아 있으면 호출 자체도 그 남은 예산으로 감싼다. 그 안에서 나는 다른
-    모든 실패(허용되지 않은 도구, 시간 초과, 세션 예외, 네트워크 오류 등)는
-    예외가 아니라 도구 메시지로 바뀐다 — 모델이 보고 고칠 기회를 갖는다
-    (스펙 §6.1).
+    남아 있으면 호출 자체는 `min(남은 예산, tool_call_cap_s)` 로 감싼다 —
+    남은 예산을 그대로 쓰면(수백 초일 수 있다) 멈춘 호출이 사실상 예산
+    전체를 태우고, 그 시점엔 이미 다음 반복의 예산 검사가 먼저 걸려 아래
+    타임아웃 메시지가 모델에게 갈 기회조차 없다. 짧은 상한으로 잘라야 그
+    메시지가 실제로 전달되고 모델이 다음 턴에 반응할 수 있다. 이 호출 안에서
+    나는 다른 모든 실패(허용되지 않은 도구, 시간 초과, 세션 예외, 네트워크
+    오류 등)는 예외가 아니라 도구 메시지로 바뀐다 (스펙 §6.1).
     """
     remaining = budget_s - (now() - started)
     if remaining <= 0:
         raise LoopFailed(_budget_exceeded_message(budget_s))
     try:
-        return await asyncio.wait_for(bridge.call(name, arguments), timeout=remaining)
+        return await asyncio.wait_for(
+            bridge.call(name, arguments), timeout=min(remaining, tool_call_cap_s)
+        )
     except TimeoutError:
-        return {"ok": False, "detail": f"'{name}' 호출이 남은 예산 안에 끝나지 않았다"}
+        return {"ok": False, "detail": f"'{name}' 호출이 {tool_call_cap_s}초 안에 끝나지 않았다"}
     except ToolNotAllowed as exc:
         return _tool_error_result(name, arguments, exc)
     except Exception as exc:
@@ -198,6 +215,7 @@ async def run_loop(
     max_turns: int = MAX_TURNS,
     budget_s: float = BUDGET_S,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    tool_call_cap_s: float = TOOL_CALL_CAP_S,
 ) -> LoopResult:
     started = now()
     messages: list[dict] = [
@@ -229,7 +247,8 @@ async def run_loop(
         )
         for call in reply.tool_calls:
             result = await _call_tool(
-                bridge, call.name, call.arguments, now=now, started=started, budget_s=budget_s,
+                bridge, call.name, call.arguments,
+                now=now, started=started, budget_s=budget_s, tool_call_cap_s=tool_call_cap_s,
             )
             if not isinstance(result, dict):
                 # 브리지가 계약(-> dict)을 어겨도 여기서 죽지 않는다 — 근거

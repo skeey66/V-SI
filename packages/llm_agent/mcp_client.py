@@ -19,15 +19,25 @@
 `ClientSession.call_tool()` 은 `CallToolResult` 객체를 돌려주지, dict 를
 돌려주지 않는다. 이 변환이 다른 파일(예: 세션 래퍼)에 있으면 계약이 두
 군데로 쪼개진다 — 이 타입 표기를 낸 파일이 직접 지키는 것이 맞다.
-`services/tool_server/main.py` 의 도구 함수는 항상 `{"ok": ..., "detail":
-..., ["exit_code": ...]}` 모양을 돌려주고, FastMCP 는 그것을 그대로
-`structured_content` 에 담으므로 있으면 그것을 신뢰한다. 없으면(오래된
-클라이언트 호환 경로거나 도구 자체가 크래시해 MCP 프로토콜 오류가 된 경우)
-`content` 블록의 텍스트와 `is_error` 로 최선의 dict 를 만든다. 이미 dict 를
-돌려주는 테스트 더블은 그대로 통과시킨다.
+
+**`structured_content` 를 무조건 믿지 않는다 — 실측으로 뒤집힌 전제다.**
+처음에는 "도구 함수가 dict 를 돌려주면 FastMCP 가 그걸 `structured_content`
+에 그대로 담는다"고 가정했지만, 실제 mcp 2.2.0 으로 `MCPServer` + `Client`
+왕복을 직접 돌려보면 그 전제가 **거짓**이었다: 도구 함수의 반환 타입 표기가
+맨 `-> dict` 면(제네릭 인자가 없으면) 출력 스키마가 안 나오고, 출력 스키마가
+없으면 서버는 구조화 콘텐츠가 아니라 `TextContent` 하나에 JSON 문자열을
+담아 보낸다 — `structured_content` 는 `None` 으로 온다. 이 프로젝트의 도구
+서버(`services/tool_server/main.py`)는 이제 `-> dict[str, Any]` 로 표기해
+출력 스키마를 내므로 정상 경로에서는 `structured_content` 가 채워진다.
+하지만 그 정합성은 **다른 파일의 타입 표기 하나**에 달려 있어 조용히
+깨지기 쉽다 — 그래서 여기서도 방어선을 하나 더 둔다: `structured_content`
+가 없으면 `content` 텍스트를 JSON 으로 파싱해보고, dict 로 파싱되면 그것을
+쓴다. 파싱도 안 되면(진짜 도구 크래시 등) `is_error` 로 최선의 dict 를
+만든다. 이미 dict 를 돌려주는 테스트 더블은 그대로 통과시킨다.
 """
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from typing import Any
 
@@ -85,6 +95,17 @@ def _content_text(content: Any) -> str:
     return "\n".join(texts)
 
 
+def _parsed_json_object(text: str) -> dict | None:
+    """`text` 가 JSON 객체로 파싱되면 그 dict 를, 아니면 `None` 을 돌려준다."""
+    if not text:
+        return None
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def _call_result_to_dict(result: Any) -> dict:
     """MCP `CallToolResult` (또는 이미 dict 인 테스트 더블)를 이 브리지가
     약속한 `dict` 로 만든다."""
@@ -93,9 +114,13 @@ def _call_result_to_dict(result: Any) -> dict:
     structured = getattr(result, "structured_content", None)
     if isinstance(structured, dict):
         return structured
+    text = _content_text(getattr(result, "content", None))
+    parsed = _parsed_json_object(text)
+    if parsed is not None:
+        return parsed
     return {
         "ok": not getattr(result, "is_error", False),
-        "detail": _content_text(getattr(result, "content", None)),
+        "detail": text,
     }
 
 
