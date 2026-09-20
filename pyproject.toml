@@ -31,6 +31,10 @@ dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "websockets>=13.0"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["packages", "services"]
+markers = [
+  "llm: 실제 로컬 모델을 부른다. 느리고 비결정적이다. CI 기본 실행에서 제외한다.",
+]
+addopts = "-m 'not llm'"
 
 [tool.setuptools.packages.find]
 where = ["packages"]
