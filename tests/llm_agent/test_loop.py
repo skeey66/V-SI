@@ -449,3 +449,27 @@ async def test_ollama_json_decode_error_becomes_loopfailed() -> None:
             role=ROLES["dev"], llm=_BadJsonLlm(), bridge=_RecordingBridge(), schemas=[],
             title="계산기", revision=1, feedback=[],
         )
+
+
+async def test_a_hanging_tool_call_is_capped_independent_of_the_remaining_budget() -> None:
+    """멈춘 도구 호출 하나가 남은 예산(600초) 전체를 태우면 안 된다 —
+    남은 예산과 무관한 짧은 상한으로 잘려, 모델이 실제로 다음 턴을 받는다."""
+
+    class _HangingBridge:
+        async def call(self, name, arguments):
+            await asyncio.sleep(5.0)
+            return {"ok": True, "detail": "너무 늦었다"}
+
+    llm = _ScriptedLlm([
+        ChatReply(tool_calls=[ToolCall("write_file", {"path": "a.py", "content": "x"})]),
+        ChatReply(content="다른 방법을 쓰겠다"),
+    ])
+    started = time.monotonic()
+    result = await run_loop(
+        role=ROLES["dev"], llm=llm, bridge=_HangingBridge(), schemas=[],
+        title="계산기", revision=1, feedback=[],
+        budget_s=600.0, tool_call_cap_s=0.05,
+    )
+    elapsed = time.monotonic() - started
+    assert result.turns == 2
+    assert elapsed < 1.0

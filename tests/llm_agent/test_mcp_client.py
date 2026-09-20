@@ -132,19 +132,22 @@ class _RealisticSession:
         return self._result
 
 
-async def test_call_tool_result_structured_content_is_used_as_the_dict() -> None:
-    """도구 서버의 dict 반환값은 FastMCP 가 structured_content 에 그대로
-    담는다 — 그게 있으면 그대로 신뢰한다."""
+async def test_call_tool_result_falls_back_to_parsing_json_text_when_structured_content_is_missing() -> None:
+    """`structured_content` 가 없어도(예: 도구 함수 타입 표기가 `-> dict` 로
+    되돌아간 경우) `content` 텍스트가 JSON 객체로 파싱되면 그것을 쓴다 —
+    `exit_code` 를 잃지 않기 위한 방어선이다."""
     result = _FakeCallToolResult(
-        structured_content={"ok": False, "detail": "1 failed", "exit_code": 1}
+        structured_content=None,
+        content=[_TextBlock('{"ok": false, "detail": "1 failed", "exit_code": 1}')],
+        is_error=False,
     )
     bridge = ToolBridge(_RealisticSession(result), "REQ-7", ["run_tests"])
     out = await bridge.call("run_tests", {})
     assert out == {"ok": False, "detail": "1 failed", "exit_code": 1}
 
 
-async def test_call_tool_result_without_structured_content_falls_back_to_text_and_is_error() -> None:
-    """structured_content 가 없으면 content 텍스트와 is_error 로 최선의
+async def test_call_tool_result_without_structured_content_or_json_text_falls_back_to_is_error() -> None:
+    """텍스트가 JSON 이 아니면(진짜 도구 크래시 등) `is_error` 로 최선의
     dict 를 만든다."""
     result = _FakeCallToolResult(structured_content=None, content=[_TextBlock("boom")], is_error=True)
     bridge = ToolBridge(_RealisticSession(result), "REQ-7", ["run_tests"])
@@ -158,3 +161,67 @@ async def test_call_tool_dict_passthrough_still_works() -> None:
     bridge = ToolBridge(session, "REQ-7", ["write_file"])
     out = await bridge.call("write_file", {"path": "a.py", "content": "x"})
     assert out == {"ok": True, "detail": "done"}
+
+
+# --- 실제 MCP 왕복(손으로 만든 더블이 아니라 진짜 MCPServer + ClientSession) ---
+#
+# 리뷰에서 지적된 함정: `_FakeCallToolResult` 로 만든 위 더블들은 속성 이름은
+# 실제 `CallToolResult` 와 같지만, "`structured_content` 가 채워져 있다"는
+# 전제 자체가 이 코드베이스에서는 거짓이다 — `services/tool_server/main.py`
+# 의 도구 함수가 `-> dict` 로 표기돼 있으면 mcp 2.2.0 은 출력 스키마를 내지
+# 않고, 출력 스키마가 없으면 서버는 구조화 콘텐츠가 아니라 `TextContent` 로
+# 직렬화한다. 그래서 이 왕복을 실제 `MCPServer`/`Client` 로 도는 테스트가
+# 근거를 지닌다 — 아래 두 테스트가 이 파일에서 유일하게 신뢰할 증거다.
+
+from typing import Any
+
+from mcp import Client
+from mcp.server.mcpserver import MCPServer
+
+
+def _real_run_tests(requirement_id: str) -> dict[str, Any]:
+    """`services/tool_server/main.py::run_tests` 와 같은 표기 —
+    `dict[str, Any]` 라야 mcp 2.2.0 이 출력 스키마를 내고, 그래야
+    `structured_content` 가 채워진다."""
+    return {"ok": False, "detail": "1 failed", "exit_code": 1}
+
+
+def _real_write_file(requirement_id: str, path: str) -> dict[str, Any]:
+    return {"ok": False, "detail": "워크스페이스를 벗어나는 경로다"}
+
+
+async def test_real_mcp_round_trip_preserves_exit_code() -> None:
+    """검증자 도구의 종료코드가 진짜 MCP 왕복을 거쳐도 살아남는다."""
+    server = MCPServer("test-tools")
+    server.add_tool(_real_run_tests, name="run_tests")
+    async with Client(server) as client:
+        bridge = ToolBridge(client.session, "REQ-7", ["run_tests"])
+        out = await bridge.call("run_tests", {})
+    assert out == {"ok": False, "detail": "1 failed", "exit_code": 1}
+
+
+async def test_real_mcp_round_trip_tool_level_failure_is_not_inverted() -> None:
+    """도구가 실행에는 성공했지만 업무적으로 거부한 경우(`ok: False`,
+    `exit_code` 없음)가 `is_error`(MCP 프로토콜 성공/실패)와 뒤집히면
+    안 된다."""
+    server = MCPServer("test-tools")
+    server.add_tool(_real_write_file, name="write_file")
+    async with Client(server) as client:
+        bridge = ToolBridge(client.session, "REQ-7", ["write_file"])
+        out = await bridge.call("write_file", {"path": "../x"})
+    assert out["ok"] is False
+
+
+async def test_real_mcp_round_trip_crashing_tool_falls_back_to_is_error() -> None:
+    """도구 함수 자체가 예외를 던지면(진짜 크래시) `is_error=True` 로
+    남고, 그 경로도 여전히 `ok: False` 로 바뀐다."""
+
+    def _crashy(requirement_id: str) -> dict[str, Any]:
+        raise RuntimeError("boom")
+
+    server = MCPServer("test-tools")
+    server.add_tool(_crashy, name="run_tests")
+    async with Client(server) as client:
+        bridge = ToolBridge(client.session, "REQ-7", ["run_tests"])
+        out = await bridge.call("run_tests", {})
+    assert out["ok"] is False

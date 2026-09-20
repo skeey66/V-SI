@@ -52,6 +52,7 @@ import os
 from collections.abc import Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 from starlette.applications import Starlette
@@ -96,7 +97,7 @@ def _ctx_root(requirement_id: str) -> Path:
 #: `{"ok": False, "detail": ...}` 모양으로 되돌린다 — 설치된 SDK 가 우연히
 #: 예외를 잡아 `is_error=True` 로 바꿔주는 동작에 기대지 않는다(그 모양은
 #: 우리 계약과 다르고 SDK 버전에 따라 달라질 수 있는 부수효과다).
-def list_files(requirement_id: str) -> dict:
+def list_files(requirement_id: str) -> dict[str, Any]:
     """워크스페이스의 파일 목록을 돌려준다."""
     try:
         root = _ctx_root(requirement_id)
@@ -106,7 +107,7 @@ def list_files(requirement_id: str) -> dict:
     return {"ok": r.ok, "detail": r.detail}
 
 
-def read_file(requirement_id: str, path: str) -> dict:
+def read_file(requirement_id: str, path: str) -> dict[str, Any]:
     """워크스페이스의 파일을 읽는다."""
     try:
         root = _ctx_root(requirement_id)
@@ -116,7 +117,7 @@ def read_file(requirement_id: str, path: str) -> dict:
     return {"ok": r.ok, "detail": r.detail}
 
 
-def write_file(requirement_id: str, path: str, content: str) -> dict:
+def write_file(requirement_id: str, path: str, content: str) -> dict[str, Any]:
     """워크스페이스에 파일을 쓴다."""
     try:
         root = _ctx_root(requirement_id)
@@ -126,7 +127,7 @@ def write_file(requirement_id: str, path: str, content: str) -> dict:
     return {"ok": r.ok, "detail": r.detail}
 
 
-def run_tests(requirement_id: str) -> dict:
+def run_tests(requirement_id: str) -> dict[str, Any]:
     """워크스페이스에서 pytest 를 실행한다."""
     try:
         root = _ctx_root(requirement_id)
@@ -136,7 +137,7 @@ def run_tests(requirement_id: str) -> dict:
     return {"ok": r.ok, "detail": r.detail, "exit_code": r.exit_code}
 
 
-def run_security_scan(requirement_id: str) -> dict:
+def run_security_scan(requirement_id: str) -> dict[str, Any]:
     """워크스페이스에서 bandit 을 실행한다."""
     try:
         root = _ctx_root(requirement_id)
@@ -146,7 +147,7 @@ def run_security_scan(requirement_id: str) -> dict:
     return {"ok": r.ok, "detail": r.detail, "exit_code": r.exit_code}
 
 
-_TOOL_FUNCS: dict[str, Callable[..., dict]] = {
+_TOOL_FUNCS: dict[str, Callable[..., dict[str, Any]]] = {
     "list_files": list_files,
     "read_file": read_file,
     "write_file": write_file,
