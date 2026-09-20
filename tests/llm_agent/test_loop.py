@@ -726,3 +726,56 @@ async def test_total_snapshot_cap_is_enforced_across_many_files() -> None:
     total = sum(len(v.encode("utf-8")) for v in result.payload["files"].values())
     assert total <= FILE_SNAPSHOT_TOTAL_CAP_BYTES + 200
     assert result.payload["files_truncated"] is True
+
+
+async def test_a_file_trimmed_out_by_the_total_cap_is_absent_not_empty() -> None:
+    """총합 상한에 걸려 통째로 잘린 파일은 **기록에서 빠져야** 한다.
+
+    빈 문자열로 남기면 payload 가 "이 파일을 빈 내용으로 썼다"고 적극적으로
+    거짓말하게 되고, 에이전트가 실제로 빈 파일을 쓴 경우와 구별할 수 없다.
+    """
+    from llm_agent.loop import (
+        FILE_SNAPSHOT_PER_FILE_CAP_BYTES,
+        FILE_SNAPSHOT_TOTAL_CAP_BYTES,
+    )
+
+    # 파일당 상한이 따로 있으므로 큰 파일 하나로는 총합이 포화되지 않는다 —
+    # 상한 크기의 파일을 여러 개 써서 총합을 채운다.
+    chunk = "x" * FILE_SNAPSHOT_PER_FILE_CAP_BYTES
+    n = FILE_SNAPSHOT_TOTAL_CAP_BYTES // FILE_SNAPSHOT_PER_FILE_CAP_BYTES + 1
+    replies = [
+        ChatReply(tool_calls=[ToolCall("write_file", {"path": f"f{i}.py", "content": chunk})])
+        for i in range(n)
+    ]
+    replies.append(
+        ChatReply(tool_calls=[ToolCall("write_file", {"path": "later.py", "content": "짧다"})])
+    )
+    replies.append(ChatReply(content="완료"))
+    llm = _ScriptedLlm(replies)
+    result = await run_loop(
+        role=ROLES["dev"], llm=llm, bridge=_RecordingBridge(), schemas=[],
+        title="계산기", revision=1, feedback=[],
+    )
+    files = result.payload["files"]
+    assert "f0.py" in files
+    assert "later.py" not in files, f"잘린 파일이 빈 값으로 남았다: {files.get('later.py')!r}"
+    assert result.payload["files_truncated"] is True
+
+
+async def test_verifier_that_called_a_non_verdict_tool_still_fails() -> None:
+    """검증자가 도구를 부르긴 했지만 **판정 도구가 아닌** 경우.
+
+    도구 호출 0회 규칙이 생기면서 이 분기가 테스트에서 가려졌다 —
+    두 실패 메시지가 모두 "도구" 를 포함해 기존 단언으로는 구분되지 않는다.
+    판정 근거가 없다는 사실은 도구를 하나 불렀다고 사라지지 않는다.
+    """
+    llm = _ScriptedLlm([
+        ChatReply(tool_calls=[ToolCall("read_file", {"path": "calc.py"})]),
+        ChatReply(content="보아하니 괜찮다"),
+    ])
+    with pytest.raises(LoopFailed) as exc:
+        await run_loop(
+            role=ROLES["qa"], llm=llm, bridge=_RecordingBridge(), schemas=[],
+            title="계산기", revision=1, feedback=[],
+        )
+    assert "판정 도구" in str(exc.value)
