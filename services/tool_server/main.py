@@ -34,15 +34,13 @@ Starlette 앱은 자기 세션 매니저를 시작하는 `lifespan=lambda app:
 session_manager.run()` 을 스스로 갖고 있다. **Starlette 의 `Mount` 는
 http/websocket 스코프만 자식에게 넘기고 lifespan 스코프는 넘기지 않는다**
 (직접 실행해 확인: 여러 서브 앱을 그냥 `Mount` 로 얹으면 세션 매니저의
-태스크그룹이 전혀 시작되지 않는다). 이건 SDK 가 이 마운트 모양 자체를
-지원하지 않는 게 아니라 — 여러 ASGI 앱을 합칠 때 lifespan 을 합치는 것은
-원래 합치는 쪽의 책임이다 — 그래서 부모 앱의 lifespan 에서 각 역할 서버의
-세션 매니저를 직접 진입시킨다(`_lowlevel_server._session_manager`, 공개
-API 는 아니지만 `streamable_http_app()` 자신의 lifespan 람다가 클로저로
-잡는 것과 동일한 객체다). `TestClient` 로 4개 중 1개를 마운트해 실제
-initialize 요청까지 통과시켜 세션 매니저가 시작됨을 확인했다(호스트 헤더
-검증 단계까지 도달 — 그 이후는 배포 환경 설정 문제이지 이 배선의 문제가
-아니다).
+태스크그룹이 전혀 시작되지 않는다). 그래서 부모 앱의 lifespan 에서 각 역할
+서버의 세션 매니저를 직접 진입시킨다 — `MCPServer.session_manager` **공개**
+프로퍼티로(`mcp/server/mcpserver/server.py`), 이 프로퍼티의 독스트링이 바로
+이 용도를 이름 붙여 설명한다: "여러 MCPServer 인스턴스를 하나의 FastAPI
+애플리케이션에 마운트하는" 것과 같은 고급 사용법을 위해 노출했다고 명시한다.
+`TestClient` 로 4개 경로 모두 실제 `initialize`+`tools/call` 왕복까지 확인했다
+(아래 "재검증" 참고).
 
 경로: 역할별로 `/mcp/<role>/` (끝 슬래시 포함 — `streamable_http_path="/"` 를
 마운트 지점 밑에 붙인 결과다). 끝 슬래시 없이 요청해도 Starlette 이 307 로
@@ -192,8 +190,7 @@ async def _lifespan(_app: Starlette):
     """
     async with AsyncExitStack() as stack:
         for server in ROLE_SERVERS.values():
-            session_manager = server._lowlevel_server._session_manager
-            await stack.enter_async_context(session_manager.run())
+            await stack.enter_async_context(server.session_manager.run())
         yield
 
 
