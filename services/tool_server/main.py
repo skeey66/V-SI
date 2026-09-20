@@ -55,6 +55,7 @@ from pathlib import Path
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
@@ -156,6 +157,23 @@ _TOOL_FUNCS: dict[str, Callable[..., dict[str, Any]]] = {
 }
 
 
+#: Host 헤더 허용 목록. MCP SDK 2.2.0 은 DNS 리바인딩 방어를 **기본으로 켜고**
+#: localhost 계열만 허용하므로, 도커 서비스명으로 접근하면 `initialize` 가
+#: 421 Misdirected Request 로 거부된다(실측: `Invalid Host header: workspace:8000`).
+#:
+#: 방어를 끄지 않고 허용 목록만 넓히는 이유: 이 서버는 `internal` 네트워크에만
+#: 있어 브라우저가 도달할 수 없으므로 리바인딩 위협 자체가 낮지만, 방어를 통째로
+#: 끄면 나중에 이 컨테이너가 다른 네트워크에 노출됐을 때 조용히 무방비가 된다.
+#: 환경변수로 덮어쓸 수 있게 해 배포 환경이 바뀌어도 코드를 고치지 않게 한다.
+_ALLOWED_HOSTS = [
+    h.strip()
+    for h in os.environ.get(
+        "VSI_MCP_ALLOWED_HOSTS", "workspace:8000,localhost:8000,127.0.0.1:8000"
+    ).split(",")
+    if h.strip()
+]
+
+
 def _build_role_server(role: str, tool_names: tuple[str, ...]) -> MCPServer:
     server = MCPServer(f"vsi-tools-{role}")
     for name in tool_names:
@@ -175,7 +193,10 @@ ROLE_SERVERS: dict[str, MCPServer] = {
 ROLE_MOUNT_PATHS: dict[str, str] = {role: f"/mcp/{role}" for role in TOOLS_BY_ROLE}
 
 _SUB_APPS: dict[str, Starlette] = {
-    role: server.streamable_http_app(streamable_http_path="/")
+    role: server.streamable_http_app(
+        streamable_http_path="/",
+        transport_security=TransportSecuritySettings(allowed_hosts=_ALLOWED_HOSTS),
+    )
     for role, server in ROLE_SERVERS.items()
 }
 
