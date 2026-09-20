@@ -210,7 +210,7 @@ async def run_loop(
     title: str,
     revision: int,
     feedback: list[dict],
-    on_tool: Callable[[str, dict, dict], None] | None = None,
+    on_tool: Callable[[str, dict, dict], Awaitable[None]] | None = None,
     now: Callable[[], float] = time.monotonic,
     max_turns: int = MAX_TURNS,
     budget_s: float = BUDGET_S,
@@ -255,7 +255,16 @@ async def run_loop(
                 # 없는 통과를 만들 수는 없으니 실패로 취급한다.
                 result = {"ok": False, "detail": f"도구가 dict 가 아닌 값을 돌려줬다: {result!r}"}
             if on_tool is not None:
-                on_tool(call.name, call.arguments, result)
+                # `on_tool` 은 awaitable 계약이다(코루틴 함수만 받는다) — sync
+                # 콜백을 관대하게 받아주면, 실수로 넘긴 코루틴 함수를 그냥
+                # `await` 없이 부르는 사고를 그대로 재현하게 된다: 코루틴은
+                # 게을러서 본문이 한 줄도 안 돌고, 예외도 없이 조용히
+                # 사라진다(가비지 컬렉션 시점에만 비결정적으로
+                # `RuntimeWarning` 이 뜬다). 여기서 무조건 `await` 해서 그
+                # 실패 모드를 구조적으로 없앤다 — 대신 sync 콜백을 넘기면
+                # `await None` 이 즉시 `TypeError` 로 죽어, 계약 위반이 첫
+                # 호출에서 바로 드러난다.
+                await on_tool(call.name, call.arguments, result)
             if role.is_verifier and call.name == role.verdict_tool:
                 verdict_exit_code = result.get("exit_code")
                 verdict_detail = result.get("detail", "")

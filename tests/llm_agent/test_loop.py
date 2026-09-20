@@ -125,8 +125,13 @@ async def test_non_verifier_payload_has_no_verdict() -> None:
 
 
 async def test_on_tool_callback_fires_for_each_call() -> None:
-    """자문 이벤트 발행 지점 (스펙 §8.1)."""
+    """자문 이벤트 발행 지점 (스펙 §8.1). `on_tool` 은 awaitable 계약이다 —
+    `record_tool_event` 처럼 DB에 쓰는 코루틴 함수가 실제 호출자다."""
     seen = []
+
+    async def on_tool(name, args, result):
+        seen.append((name, result["ok"]))
+
     llm = _ScriptedLlm([
         ChatReply(tool_calls=[ToolCall("write_file", {"path": "a.py", "content": "x"})]),
         ChatReply(content="완료"),
@@ -134,9 +139,30 @@ async def test_on_tool_callback_fires_for_each_call() -> None:
     await run_loop(
         role=ROLES["dev"], llm=llm, bridge=_RecordingBridge(), schemas=[],
         title="계산기", revision=1, feedback=[],
-        on_tool=lambda name, args, result: seen.append((name, result["ok"])),
+        on_tool=on_tool,
     )
     assert seen == [("write_file", True)]
+
+
+async def test_on_tool_callback_is_actually_awaited() -> None:
+    """회귀 방지: `on_tool` 이 코루틴 함수인데 `await` 없이 호출되면, 코루틴은
+    게으르므로 함수 본문이 단 한 줄도 안 돈다 — 예외도 안 나고 조용히
+    아무 일도 없었던 것처럼 지나간다. 여기서 그 증거(호출 횟수)로 잡는다."""
+    calls = []
+
+    async def on_tool(name, args, result):
+        calls.append(1)
+
+    llm = _ScriptedLlm([
+        ChatReply(tool_calls=[ToolCall("write_file", {"path": "a.py", "content": "x"})]),
+        ChatReply(content="완료"),
+    ])
+    await run_loop(
+        role=ROLES["dev"], llm=llm, bridge=_RecordingBridge(), schemas=[],
+        title="계산기", revision=1, feedback=[],
+        on_tool=on_tool,
+    )
+    assert len(calls) == 1
 
 
 # --- 브리핑에 없는 세 가지 요구사항 --------------------------------------

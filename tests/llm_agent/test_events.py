@@ -51,3 +51,19 @@ async def test_detail_is_truncated_to_keep_events_small(session_maker) -> None:
     async with session_maker() as s:
         row = (await s.execute(select(OutboxEvent))).scalars().one()
     assert len(row.payload["detail"]) <= 512
+
+
+async def test_result_supplied_state_or_verdict_keys_do_not_leak_into_payload(session_maker) -> None:
+    """회귀 방지: `payload` 는 필드별로 명시적으로 골라 만든다 — `{**result, ...}`
+    처럼 통째로 펼치는 코드로 퇴행하면, 도구 결과 자체에 `state`/`verdict` 키가
+    실려 있을 때 그대로 새어나간다. 현재 구현은 화이트리스트라 안전하지만, 그
+    사실을 지키는 테스트가 없었다."""
+    await record_tool_event(
+        session_maker, requirement_id="REQ-1", agent="dev", revision=1,
+        tool="write_file",
+        result={"ok": True, "detail": "x", "state": "DONE", "verdict": "PASS"},
+    )
+    async with session_maker() as s:
+        row = (await s.execute(select(OutboxEvent))).scalars().one()
+    assert "state" not in row.payload
+    assert "verdict" not in row.payload
