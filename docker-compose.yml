@@ -31,6 +31,10 @@ services:
       VSI_PUSH_URL: http://orchestrator:8000/push
       VSI_PUSH_TOKEN: ${VSI_PUSH_TOKEN:-dev-only-token}
       VSI_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
+      # Task 14: 정체 천장. 에이전트 자기 예산(600초, packages/llm_agent/loop.py의
+      # BUDGET_S)보다 커야 정상 작업이 강제 실패당하지 않는다 — "느린 작업"이
+      # 아니라 "죽은 프로세스"만 잡는다.
+      VSI_RECONCILE_STUCK_S: ${VSI_RECONCILE_STUCK_S:-900}
     depends_on:
       postgres: { condition: service_healthy }
     ports: ["8000:8000"]
