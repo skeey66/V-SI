@@ -473,3 +473,6 @@ async def test_a_hanging_tool_call_is_capped_independent_of_the_remaining_budget
     elapsed = time.monotonic() - started
     assert result.turns == 2
     assert elapsed < 1.0
+    # 잘렸다는 사실 자체가 모델에게 메시지로 전달돼야 한다 — 그냥 빈 결과나
+    # 예외로 사라지면 상한을 둔 의미가 없다.
+    assert any("끝나지 않았다" in str(m.get("content", "")) for m in llm.seen[-1])

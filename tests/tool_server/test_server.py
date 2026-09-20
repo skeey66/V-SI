@@ -45,6 +45,30 @@ async def test_write_file_schema_carries_path_and_content() -> None:
     assert write_file_tool.input_schema["properties"].keys() >= {"path", "content"}
 
 
+async def test_every_registered_tool_has_an_output_schema() -> None:
+    """`llm_agent/mcp_client.py::_call_result_to_dict` 는 mcp 가 `structured_content`
+    를 채워준다는 데 기대는데, mcp 2.2.0 은 도구 함수의 반환 타입 표기가 맨
+    `-> dict` 면(제네릭 인자 없이) 출력 스키마를 내지 않고, 출력 스키마가 없으면
+    `structured_content` 가 항상 `None` 으로 온다(직접 왕복시켜 확인했다) —
+    `exit_code` 가 텍스트 속에 묻혀 사라지는 바로 그 회귀다.
+
+    아래 다섯 함수는 전부 `-> dict[str, Any]` 로 표기돼 있어야 한다. 이 테스트는
+    그 표기를 직접 보는 대신(타입 표기는 런타임에 안 남는다) 실제로 등록된
+    도구의 출력 스키마가 존재하는지 본다 — 표기가 맨 `dict` 로 되돌아가면 여기서
+    바로 잡힌다. `llm_agent` 쪽의 `json.loads` 방어선(있다)이 이 회귀를 가려버려
+    그 테스트 스위트만 봐서는 드러나지 않으므로, 이 표기의 계약은 이 파일이
+    직접 지켜야 한다.
+    """
+    for role, names in TOOLS_BY_ROLE.items():
+        tools = await ROLE_SERVERS[role].list_tools()
+        by_name = {t.name: t for t in tools}
+        for name in names:
+            assert by_name[name].output_schema is not None, (
+                f"{role}/{name} 의 도구 함수가 출력 스키마를 내지 않는다 — "
+                "반환 타입 표기가 맨 `-> dict` 로 되돌아갔을 수 있다"
+            )
+
+
 def test_unknown_role_gets_no_tools() -> None:
     assert allowed_tools("wat") == ()
 
