@@ -61,6 +61,23 @@ logger = logging.getLogger(__name__)
 #: 순서가 두 곳에 적히면 갈라진다. 읽히지 않는 쪽을 지웠다.
 VERIFIERS = ["qa", "security"]
 
+
+def build_feedback(artifacts: list[dict], revision: int) -> list[dict]:
+    """직전 회차 검증자 아티팩트로 환류 피드백을 만든다.
+
+    LLM 에이전트는 무엇이 왜 반려됐는지 알아야 고칠 수 있다 (스펙 §4.3).
+    완료 기준 4 가 요구하는 "환류가 실제 실패 출력에 근거한다"의 출발점이다.
+    """
+    if revision <= 1:
+        return []
+    previous = revision - 1
+    return [
+        {"agent": a["agent"], "verdict": a["verdict"], "summary": a.get("summary", "")}
+        for a in artifacts
+        if a.get("revision") == previous and a.get("verdict") is not None
+    ]
+
+
 TASK_SUBMITTED = "submitted"
 TASK_WORKING = "working"
 TASK_COMPLETED = "completed"
@@ -227,6 +244,32 @@ class WorkflowEngine:
                     "attempt": attempt,
                 },
             )
+            # 환류 피드백은 회차 1엔 존재할 수 없다(직전 회차가 없다) — 매
+            # 디스패치마다 무의미한 조회를 돌리지 않도록 회차 2 이상에서만 쓴다.
+            artifacts: list[dict] = []
+            if req.revision > 1:
+                rows = (
+                    await s.execute(
+                        select(Artifact, WorkflowTask)
+                        .join(WorkflowTask, Artifact.producer_task == WorkflowTask.task_id)
+                        .where(Artifact.requirement_id == requirement_id)
+                    )
+                ).all()
+                artifacts = [
+                    {
+                        "revision": t.revision,
+                        "agent": t.agent,
+                        "verdict": t.verdict,
+                        "summary": a.content.get("summary", ""),
+                    }
+                    for a, t in rows
+                ]
+            dispatch_payload = {
+                "requirement_id": requirement_id,
+                "title": req.title,
+                "revision": req.revision,
+                "feedback": build_feedback(artifacts, req.revision),
+            }
             await s.commit()
             task_id = task.task_id
 
@@ -241,7 +284,7 @@ class WorkflowEngine:
         while True:
             try:
                 a2a_id = await asyncio.wait_for(
-                    client.submit({"requirement_id": requirement_id}, key),
+                    client.submit(dispatch_payload, key),
                     timeout=self._timeouts.tool_s,
                 )
                 break
