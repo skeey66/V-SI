@@ -1,15 +1,17 @@
-"""수용 테스트 — 스펙 10절의 완료 정의 5개를 그대로 고정한다.
+"""수용 테스트 — SP1 스펙 10절의 완료 정의 5개 + SP2 스펙 §13 기준 6을 고정한다.
 
 전제: `docker compose up -d --build`로 스택 전체(postgres·오케스트레이터·
 에이전트 4종·event-gateway·Jaeger·web)가 떠 있어야 한다.
 
-다섯 기준과 이 파일의 시험 대응:
+여섯 기준과 이 파일의 시험 대응:
 
 1. 단일 명령으로 환류 2회 후 accepted       → `test_completion_criterion_1_*`
 2. Jaeger 단일 트레이스로 전 구간 관찰 가능   → `test_completion_criterion_2_*`
 3. 그래프 UI가 Task 이동을 실시간 관찰       → `test_completion_criterion_3_*`
 4. 오케스트레이터 SIGKILL 후 재기동해도 완주 → `test_completion_criterion_4_*`
 5. LLM 호출 0회, 토큰 0원                    → `test_completion_criterion_5_*`
+6. (SP2 §13 기준 6) 외부 LLM API 호출 0회,
+   Ollama만 사용                             → `test_completion_criterion_6_*`
 
 **3번은 정직하게 다룬다.** 이 프로젝트에는 실제 브라우저를 구동해 화면 픽셀을
 확인할 도구가 없다(Playwright/Chrome MCP 같은 것이 이 리포에 배선돼 있지
@@ -291,6 +293,14 @@ async def test_completion_criterion_5_no_llm_calls() -> None:
     `node_modules`를 반드시 빼야 한다(서드파티 라이브러리 소스에 우연히
     "anthropic"·"openai" 문자열이 섞여 들어와도 이 프로젝트의 의존이 아니다).
 
+    SP2 §13 기준 6(외부 LLM API 호출 0회)은 이 스캔을 "SP1 criterion-5 확장"으로
+    지정한다 — `packages/llm_agent`가 이미 `packages/` 아래에 있으므로 별도
+    스캔을 새로 만들지 않는다(같은 규칙을 두 벌 두면 서로 어긋날 때 어느 쪽을
+    믿을지 애매해진다). 대신 `llm_agent`가 실제로 스캔 대상에 들어와 있다는
+    것만 명시적으로 단언해, 이 시험이 SP2 코드까지 훑고 있다는 근거를 남긴다.
+    Ollama 엔드포인트만 쓴다는 더 구체적인 확인(“이 문자열이 없다”가 아니라
+    “이 문자열이 있고 다른 건 없다”)은 `test_completion_criterion_6_*`가 맡는다.
+
     **경로는 `__file__`에서 유도한 리포 루트에 고정한다.** 상대 경로
     (`Path("packages")`)는 cwd가 리포 루트일 때만 맞고, 그 밖에서는 `rglob`이
     빈 결과를 내며 **아무것도 읽지 않고 통과**한다. 이 시험의 값어치는 "스캔했고
@@ -306,6 +316,9 @@ async def test_completion_criterion_5_no_llm_calls() -> None:
         for p in (REPO_ROOT / root).rglob("*.py")
     ]
     assert len(py_files) > 10, f"Python 스캔 대상이 비었다 — 경로가 틀렸다: {py_files}"
+    assert any(p.parent.name == "llm_agent" for p in py_files), (
+        "packages/llm_agent 가 스캔 대상에 없다 — SP2 §13 기준 6이 요구하는 확장이 빠졌다"
+    )
     py_text = " ".join(p.read_text(encoding="utf-8") for p in py_files)
     for token in forbidden:
         assert token not in py_text.lower(), f"Python 코드에서 LLM 의존 발견: {token}"
@@ -326,3 +339,25 @@ async def test_completion_criterion_5_no_llm_calls() -> None:
     )
     for token in ("anthropic", "openai"):
         assert token not in package_json, f"web/package.json에서 LLM 의존 발견: {token}"
+
+
+# --------------------------------------------------------- criterion 6 (SP2 §13)
+
+
+def test_completion_criterion_6_ollama_is_the_only_llm_endpoint() -> None:
+    """SP2 §13 기준 6 — 외부 LLM API 호출 0회, Ollama만 사용한다.
+
+    criterion 5는 "금지어가 없다"만 본다. 이 시험은 그 반대쪽 — "쓰는 게
+    로컬 Ollama의 `/api/chat`뿐이고, 그 밖의 어떤 `https://` 원격 주소도
+    코드에 박혀 있지 않다"는 것을 직접 확인한다. 두 시험이 서로 다른 방향에서
+    같은 결론(외부 LLM 의존 없음)을 겹쳐 고정하되, 같은 스캔을 복제하지는
+    않는다.
+
+    경로는 criterion 5와 마찬가지로 `REPO_ROOT`에서 유도한다 — 상대 경로는
+    cwd에 따라 조용히 빈 스캔이 될 수 있다.
+    """
+    path = REPO_ROOT / "packages" / "llm_agent" / "ollama.py"
+    assert path.is_file(), f"{path} 가 없다 — 경로가 틀렸다"
+    text = path.read_text(encoding="utf-8")
+    assert "/api/chat" in text, "Ollama chat 엔드포인트를 호출하지 않는다"
+    assert "https://" not in text, "ollama.py에 원격(https) 주소가 박혀 있다"
