@@ -199,3 +199,35 @@ def test_strip_root_does_not_corrupt_output_when_root_is_substring_of_resolved(
     assert "/private" not in result
     assert "/var/folders" not in result
     assert result == 'File "test_calc.py", line 1'
+
+
+def test_security_scan_does_not_flag_asserts_in_acceptance_tests(tmp_path: Path) -> None:
+    """기획이 쓴 인수 테스트의 `assert` 때문에 보안이 FAIL 하면 안 된다.
+
+    bandit 의 `B101: assert_used` 는 테스트 파일까지 잡는다. 기획 에이전트가
+    pytest 인수 테스트를 쓰는 것이 이 시스템의 설계이므로, 제외하지 않으면
+    **설계대로 동작하는 실행이 영원히 보안 FAIL** 이 된다(실측: 실제 LLM
+    실행 3회차 전부 이 사유로 반려됐다).
+    """
+    write_file(tmp_path, "calc.py", "def add(a, b):\n    return a + b\n")
+    write_file(
+        tmp_path,
+        "test_calc.py",
+        "from calc import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n",
+    )
+    result = run_security_scan(tmp_path)
+    assert result.exit_code == 0, f"인수 테스트의 assert 가 잡혔다: {result.detail}"
+    assert result.ok
+
+
+def test_security_scan_still_flags_real_issues_in_implementation(tmp_path: Path) -> None:
+    """테스트를 제외해도 구현 파일의 실제 문제는 계속 잡아야 한다."""
+    write_file(tmp_path, "bad.py", "import subprocess\nsubprocess.call('ls', shell=True)\n")
+    write_file(
+        tmp_path,
+        "test_bad.py",
+        "def test_placeholder():\n    assert True\n",
+    )
+    result = run_security_scan(tmp_path)
+    assert result.exit_code != 0
+    assert not result.ok

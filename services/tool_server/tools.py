@@ -174,5 +174,19 @@ def run_tests(root: Path) -> ToolResult:
     return _run(root, [sys.executable, "-m", "pytest", "-q", "--no-header"])
 
 
+#: 보안 검사에서 제외할 경로. 기획 에이전트가 쓰는 인수 테스트는 `assert` 로
+#: 단언하는데, bandit 은 그것을 `B101: assert_used` 로 잡는다(최적화 바이트코드
+#: 에서 제거된다는 이유). 즉 **설계대로 동작하는 시스템이 영원히 FAIL 한다** —
+#: 실측으로 확인했다: 실제 LLM 실행 3회차 전부 보안이 FAIL 했고 사유가 전부
+#: `./test_add.py:12` 의 assert 였다.
+#:
+#: 보안 에이전트가 검사해야 하는 것은 개발이 쓴 **구현**이지 기획이 쓴 테스트가
+#: 아니다. bandit 자신의 문서도 테스트 디렉터리를 스캔 대상에서 빼라고 권한다.
+_SECURITY_SCAN_EXCLUDE = "./test_*.py,./tests"
+
+
 def run_security_scan(root: Path) -> ToolResult:
-    return _run(root, [sys.executable, "-m", "bandit", "-r", ".", "-q"])
+    return _run(
+        root,
+        [sys.executable, "-m", "bandit", "-r", ".", "-q", "-x", _SECURITY_SCAN_EXCLUDE],
+    )
