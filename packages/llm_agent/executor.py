@@ -61,7 +61,9 @@ FAILED 로 끝나면 오케스트레이터는 EXECUTION 실패로 분류해 재�
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+from contextlib import AsyncExitStack
 
 import httpx
 from a2a.helpers import get_data_parts, new_task
@@ -81,6 +83,35 @@ from llm_agent.ollama import OllamaClient
 from llm_agent.roles import ROLES
 
 logger = logging.getLogger(__name__)
+
+
+#: MCP 연결 절차(스트림 연결 + 세션 진입 + `initialize` + `list_tools`) 전체에
+#: 거는 상한(초). `run_loop`의 600초 예산은 이 절차가 끝난 뒤에야 시작하므로
+#: (아래 `run_task`에서 이 블록을 통과해야 `run_loop`를 부른다), 여기에
+#: 상한이 없으면 에이전트 총 wall-clock이 `연결 대기(무한) + 600초`가 되어
+#: 오케스트레이터의 900초 천장(스펙 §9.2 — "죽은 프로세스만 잡는다")이
+#: "워크스페이스 컨테이너가 느리게 뜨는 것"과 "MCP 서버가 죽었거나 URL이
+#: 잘못됐다"를 구분할 수 없게 만든다.
+#:
+#: `workspace` 서비스(`docker-compose.yml`)에는 헬스체크도 `depends_on`
+#: 게이트도 없다 — 에이전트가 그보다 먼저 뜰 수 있고, 잘못된 URL이면 TCP
+#: 연결 자체가 (즉시 거부되지 않고) 리눅스 기본 SYN 재시도 상한(2분 안팎)
+#: 까지 매달릴 수 있다. 반면 연결에 성공한 뒤의 `initialize`/`list_tools`는
+#: 로컬 컨테이너 간 왕복 한두 번이라 정상적으로는 수백 ms 안에 끝난다.
+#: 60초로 잡는다 — 이미지 빌드는 끝난 뒤 컨테이너 부팅(uvicorn 기동)만
+#: 남은 정상적인 "느린 시작"은 여유 있게 넘기면서, 오케스트레이터의 900초
+#: 천장에 240초(= 900 - 600 - 60)의 넉넉한 여유를 남겨 이 타임아웃 자체가
+#: 그 천장보다 먼저, 더 구체적인 원인으로 확정 실패한다.
+MCP_CONNECT_TIMEOUT_S = 60.0
+
+
+class McpConnectTimeout(RuntimeError):
+    """MCP 연결 절차(연결·`initialize`·`list_tools`)가 시간 안에 끝나지 않았다.
+
+    이 실패는 `run_loop`의 600초 예산 *앞*에서 난다 — 그 예산이 감당할 범위가
+    아니다. 오케스트레이터에는 `McpRoleMismatch`처럼 잡히지 않고 그대로
+    전파되어 `execute()`가 `TASK_STATE_FAILED`로 끝낸다.
+    """
 
 
 class McpRoleMismatch(RuntimeError):
@@ -164,31 +195,45 @@ class LlmExecutor(AgentExecutor):
             # `(read, write, _)`(구버전 SDK 패턴)이 아니다. 소스를 직접
             # 확인했다(`mcp/client/streamable_http.py`: `yield read_stream,
             # write_stream`).
-            async with streamable_http_client(self._mcp_url) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    listed = await session.list_tools()
-                    raw = [
-                        {"name": t.name, "description": t.description or "",
-                         "input_schema": t.input_schema or {}}
-                        for t in listed.tools
-                    ]
-                    schemas = tool_schemas(self.role.tools, raw)
-                    schema_names = {s["function"]["name"] for s in schemas}
-                    missing = set(self.role.tools) - schema_names
-                    if missing:
-                        raise McpRoleMismatch(
-                            f"'{self.role.name}' 역할이 {self._mcp_url!r} 에 "
-                            f"연결됐지만 그 서버는 이 역할에 필요한 도구를 "
-                            f"다 광고하지 않는다 — 없는 도구: {sorted(missing)}. "
-                            "잘못된 역할 경로로 연결됐을 가능성이 높다."
+            async with AsyncExitStack() as stack:
+                try:
+                    async with asyncio.timeout(MCP_CONNECT_TIMEOUT_S):
+                        read, write = await stack.enter_async_context(
+                            streamable_http_client(self._mcp_url)
                         )
-                    bridge = ToolBridge(session, requirement_id, self.role.tools)
-                    result = await run_loop(
-                        role=self.role, llm=llm, bridge=bridge, schemas=schemas,
-                        title=title, revision=revision, feedback=feedback,
-                        on_tool=on_tool,
+                        session = await stack.enter_async_context(
+                            ClientSession(read, write)
+                        )
+                        await session.initialize()
+                        listed = await session.list_tools()
+                except TimeoutError as exc:
+                    raise McpConnectTimeout(
+                        f"'{self.role.name}' 역할이 {self._mcp_url!r} 에 연결하는 "
+                        f"절차(연결·initialize·list_tools)가 {MCP_CONNECT_TIMEOUT_S}초 "
+                        "안에 끝나지 않았다 — 워크스페이스 컨테이너가 죽었거나 "
+                        "URL이 잘못됐을 가능성이 높다."
+                    ) from exc
+                raw = [
+                    {"name": t.name, "description": t.description or "",
+                     "input_schema": t.input_schema or {}}
+                    for t in listed.tools
+                ]
+                schemas = tool_schemas(self.role.tools, raw)
+                schema_names = {s["function"]["name"] for s in schemas}
+                missing = set(self.role.tools) - schema_names
+                if missing:
+                    raise McpRoleMismatch(
+                        f"'{self.role.name}' 역할이 {self._mcp_url!r} 에 "
+                        f"연결됐지만 그 서버는 이 역할에 필요한 도구를 "
+                        f"다 광고하지 않는다 — 없는 도구: {sorted(missing)}. "
+                        "잘못된 역할 경로로 연결됐을 가능성이 높다."
                     )
+                bridge = ToolBridge(session, requirement_id, self.role.tools)
+                result = await run_loop(
+                    role=self.role, llm=llm, bridge=bridge, schemas=schemas,
+                    title=title, revision=revision, feedback=feedback,
+                    on_tool=on_tool,
+                )
         return result.payload
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
