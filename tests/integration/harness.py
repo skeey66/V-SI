@@ -50,6 +50,12 @@ POLL_INTERVAL_S = 0.2
 TERMINAL_TIMEOUT_S = float(os.environ.get("VSI_HARNESS_TIMEOUT_S", "90"))
 BOOT_TIMEOUT_S = 120.0  # kill·재기동을 반복하면 도커가 느려진다(실측: 60초를 넘긴 적 있음)
 
+#: 스텁 모드 `TERMINAL_TIMEOUT_S`(90초)는 각본대로 즉시 응답하는 가짜 에이전트를
+#: 전제한 값이라 실제 모델에는 안 맞는다. 실측: `qwen3:8b`로 요구사항 1건이
+#: 환류 2회(회차 3개)를 거쳐 accepted에 도달하는 데 11분 30초(690초)가 걸렸다.
+#: 그 위에 넉넉한 여유를 둔다 — 호스트가 더 느리거나 재시도가 끼면 더 걸린다.
+LLM_TERMINAL_TIMEOUT_S = float(os.environ.get("VSI_LLM_HARNESS_TIMEOUT_S", "1200"))
+
 
 @dataclass
 class ScenarioResult:
@@ -345,6 +351,71 @@ async def run_scenario(
             raise AssertionError(
                 f"{TERMINAL_TIMEOUT_S}초 안에 종료 상태에 도달하지 못했다 "
                 f"(마지막 상태: {state})"
+            )
+
+        async with maker() as s:
+            return await collect(s, requirement_id)
+    finally:
+        await engine.dispose()
+
+
+async def run_scenario_live(
+    requirement_id: str,
+    title: str,
+    run_id: str | None = None,
+    timeout_s: float = LLM_TERMINAL_TIMEOUT_S,
+) -> ScenarioResult:
+    """`VSI_AGENT_MODE=llm` 스택을 상대로 워크플로 하나를 끝까지 돌린다.
+
+    `run_scenario`와 다른 점은 딱 하나, `reset_agents`를 부르지 않는다는
+    것이다. `reset_agents`의 컨테이너 강제 재기동은 `AgentScenario`(스텁
+    에이전트 안에 사는 verdict 커서·호출 카운터 상태 기계)를 시나리오 파일로
+    갈아 끼우기 위한 것이다 — LLM 에이전트에는 그런 커서가 없고 `VSI_SCENARIO`
+    환경변수를 읽지도 않으니, 이 함수에 시나리오 경로 인자 자체가 없다.
+    그런데도 재기동 비용(도커를 반복 기동하면 60초를 넘긴 적도 있다, 이 파일
+    상단 `BOOT_TIMEOUT_S` 주석 참고)은 스텁 모드와 똑같이 든다 — 요구사항
+    하나에 실측 11분 30초가 걸리는 실제 모델 테스트 위에 매번 그 비용을 얹을
+    이유가 없다.
+
+    전제: 호출자가 이미 `ollama serve` + `qwen3:8b pull` +
+    `VSI_AGENT_MODE=llm docker compose up -d --force-recreate planner dev qa
+    security`로 스택을 띄워 뒀다. 여기서는 (1) 이전 실행 흔적 정리
+    (2) 헬스체크 확인 — 재기동은 아니고 이미 뜬 상태인지만 본다 — (3) 요구사항
+    제출 (4) DB를 폴링해 종단 상태를 기다리는 `run_scenario`의 나머지 로직만
+    그대로 재사용한다.
+    """
+    engine = make_engine(DB_URL)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        await _purge(maker, requirement_id)
+        await _purge_abandoned(maker, keep=requirement_id)
+        await _wait_healthy()
+        async with httpx.AsyncClient(timeout=30) as c:
+            resp = await c.post(
+                f"{ORCHESTRATOR_URL}/requirements",
+                json={
+                    "requirement_id": requirement_id,
+                    "title": title,
+                    "run_id": run_id or f"run-{requirement_id}",
+                },
+            )
+            resp.raise_for_status()
+
+        loop = asyncio.get_running_loop()
+        end = loop.time() + timeout_s
+        state: RequirementState | None = None
+        while loop.time() < end:
+            async with maker() as s:
+                req = await s.get(WorkflowRequirement, requirement_id)
+                state = RequirementState(req.state) if req else None
+            if state in TERMINAL:
+                break
+            await asyncio.sleep(POLL_INTERVAL_S)
+        else:
+            raise AssertionError(
+                f"{timeout_s}초 안에 종단 상태에 도달하지 못했다 "
+                f"(마지막 상태: {state}) — ollama serve/qwen3:8b/"
+                f"VSI_AGENT_MODE=llm 스택 기동 여부를 확인한다."
             )
 
         async with maker() as s:
