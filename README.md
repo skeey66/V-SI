@@ -148,4 +148,7 @@ CI는 세 job으로 나뉘어 있다 — `unit`(postgres 서비스 컨테이너)
 Python 3.11 · FastAPI · `a2a-sdk` 1.1.2 (A2A 스펙 1.0, HTTP+JSON) · PostgreSQL ·
 OpenTelemetry (+ `instrumentation-fastapi` / `-httpx`) → Jaeger · React · pytest · Docker
 
-SP2에서 추가: MCP Python SDK · Ruff · mypy · Bandit · Semgrep · Playwright
+SP2에서 추가: MCP Python SDK (`mcp` 2.x) · Ollama (`qwen3:8b`) · Bandit · pytest
+
+`pytest` 와 `bandit` 은 개발 의존성이 아니라 **워크스페이스 컨테이너의 런타임
+의존성**이다 — QA 와 보안 에이전트가 생성된 코드에 대고 실제로 실행하는 도구다.
