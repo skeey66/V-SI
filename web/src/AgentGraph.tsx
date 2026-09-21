@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { useEventStream, type VsiEvent } from "./useEventStream";
+import type { StreamState, VsiEvent } from "./useEventStream";
 import "./AgentGraph.css";
-
-const GATEWAY_WS_URL = "ws://localhost:8100/ws";
 
 type NodeId = "orchestrator" | "planner" | "dev" | "qa" | "security";
 
@@ -50,20 +48,22 @@ function labelForEvent(e: VsiEvent): { type: string; agent: string; detail: stri
   }
 }
 
-export function AgentGraph() {
-  const stream = useEventStream(GATEWAY_WS_URL);
+/** 노드 그래프 + 이벤트 로그.
+ *
+ * `useEventStream` 을 **직접 부르지 않는다** — 스트림은 `App` 이 하나만 열어
+ * 두 탭에 내려준다. 탭마다 연결하면 WebSocket 이 둘이 되고, 게이트웨이는
+ * 생중계만 하므로(스냅샷 없음) 두 탭이 서로 다른 구간을 보게 된다. */
+export function AgentGraph({ stream }: { stream: StreamState }) {
   const {
     events,
     activeAgents,
     lastResult,
     activity,
     revision,
-    requirementState,
     reworkPulse,
     escalationReason,
     escalationAgent,
     escalationFailureClass,
-    status,
   } = stream;
 
   // 환류 화살표는 순간의 사건이다 — revision_started가 찍힐 때만 잠깐 그린다.
@@ -79,40 +79,9 @@ export function AgentGraph() {
     return () => clearTimeout(t);
   }, [reworkPulse]);
 
-  const latestRequirementId = (() => {
-    for (let i = events.length - 1; i >= 0; i -= 1) {
-      if (events[i].aggregate === "requirement") return events[i].aggregate_id;
-    }
-    return null;
-  })();
-
   const hasSeenAnything = events.length > 0;
 
   return (
-    <div className="vsi-root">
-      <header className="vsi-header">
-        <div className="vsi-title">
-          V-SI Agent Graph
-          <span className="vsi-dim">{latestRequirementId ? `· ${latestRequirementId}` : ""}</span>
-        </div>
-        <div className="vsi-status-row">
-          <span>
-            <span className={`vsi-status-dot ${status}`} />
-            {status === "open" ? "connected" : status === "connecting" ? "connecting…" : "reconnecting…"}
-          </span>
-          {revision > 1 && <span>rev {revision}</span>}
-          {requirementState && (
-            <span
-              className={`vsi-state-pill ${requirementState === "escalated" ? "escalated" : ""} ${
-                requirementState === "accepted" ? "accepted" : ""
-              }`}
-            >
-              {requirementState}
-            </span>
-          )}
-        </div>
-      </header>
-
       <div className="vsi-layout">
         <div className="vsi-canvas-wrap">
           <svg viewBox="0 0 460 300" width="100%" role="img" aria-label="에이전트 상태 그래프">
@@ -214,7 +183,6 @@ export function AgentGraph() {
           )}
         </div>
       </div>
-    </div>
   );
 }
 

@@ -1,0 +1,83 @@
+.vsi-prog {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 18px;
+  margin-bottom: 14px;
+}
+.vsi-prog.warn { border-color: #6b4f22; }
+.vsi-prog.bad { border-color: #5c2f2f; }
+
+.vsi-prog-steps {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.vsi-prog-step {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--text-faint);
+  position: relative;
+  padding-right: 26px;
+}
+/* 단계 사이를 잇는 선 — 마지막 뒤에는 긋지 않는다. */
+.vsi-prog-step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  right: 9px;
+  width: 12px;
+  height: 1px;
+  background: var(--line-strong);
+}
+
+.vsi-prog-dot {
+  display: grid;
+  place-items: center;
+  width: 21px;
+  height: 21px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.vsi-prog-step.done { color: var(--text-muted); }
+.vsi-prog-step.done .vsi-prog-dot { border-color: var(--c-pass); color: var(--c-pass); }
+
+.vsi-prog-step.here { color: var(--text); font-weight: 600; }
+.vsi-prog-step.here .vsi-prog-dot {
+  border-color: #6fe0c0;
+  color: #17120a;
+  background: #6fe0c0;
+}
+.vsi-prog.warn .vsi-prog-step.here .vsi-prog-dot { border-color: #e8c07a; background: #e8c07a; }
+.vsi-prog.bad .vsi-prog-step.here .vsi-prog-dot { border-color: #f0a0a0; background: #f0a0a0; }
+
+.vsi-prog-now { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+.vsi-prog-badge {
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid var(--line-strong);
+  color: var(--text-muted);
+}
+.vsi-prog-badge.good { border-color: var(--c-pass); color: var(--c-pass); }
+.vsi-prog-badge.warn { border-color: #d9a04f; color: #e8c07a; }
+.vsi-prog-badge.bad { border-color: var(--c-fail); color: var(--c-fail); }
+.vsi-prog-badge.busy { border-color: #4a5a72; color: #9fb4d2; }
+
+.vsi-prog-dim { font-size: 11.5px; color: var(--text-faint); }
