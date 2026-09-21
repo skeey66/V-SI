@@ -1,0 +1,21 @@
+# 기획이 쓴 인수 테스트가 아무것도 검사하지 않는 경우 — 기획 게이트가 걸린다.
+#
+# 스텁에는 `check_acceptance_tests` 도구가 없으므로 그 도구의 판정을 여기서
+# 대신 적는다: `planner: verdicts: [FAIL]` 은 스텁이 `exit_code = 1` 을 찍게
+# 하고, 오케스트레이터는 그것을 FAIL 로 도출해 개발을 보내지 않는다
+# (`engine.advance` 의 기획 게이트).
+#
+# 이 fixture 가 재현하는 실제 사건은 REQ-SITE-101435 다: 기획이 본문을
+# `assert True` 로 비워뒀고, 구현이 없는데도 테스트가 4개 다 통과했다. 그
+# 상태로 개발을 보내는 바람에 환류 3회를 다 쓰고 1시간 18분 뒤에 escalated
+# 로 끝났다. 게이트는 그 한 시간을 기획 직후로 당긴다.
+#
+# 승인(`POST /requirements/{id}/approve`) 뒤에는 기획이 다시 돌지 않는다 —
+# 그래서 planner 의 verdict 목록에 FAIL 하나만 있으면 된다. 개발부터 이어지고
+# qa·security 는 통과한다.
+scenario: planner_gate_blocks
+agents:
+  planner:  { verdicts: [FAIL] }
+  dev:      { verdicts: [], latency_ms: 200 }
+  qa:       { verdicts: [PASS] }
+  security: { verdicts: [PASS] }

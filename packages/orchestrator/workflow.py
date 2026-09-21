@@ -34,6 +34,12 @@ _TABLE: dict[tuple[RequirementState, WorkflowSignal], RequirementState] = {
     (S.PLANNED, Sig.PLAN_READY): S.IMPLEMENTING,
     (S.IMPLEMENTING, Sig.DEV_DONE): S.VERIFYING,
     (S.IMPLEMENTING, Sig.APPROVAL_REQUIRED): S.BLOCKED,
+    # 기획 게이트: 기획이 쓴 인수 테스트가 아무것도 검사하지 않으면 개발을
+    # 보내지 않고 사람을 기다린다. `BLOCKED` 는 종료 상태가 아니고 리컨실러의
+    # `ACTIVE` 집합에도 없다 — 푸는 것은 사람이다. 승인이 오면 기존
+    # `(BLOCKED, APPROVAL_GRANTED) -> IMPLEMENTING` 을 그대로 타고 개발이
+    # 디스패치된다.
+    (S.PLANNED, Sig.APPROVAL_REQUIRED): S.BLOCKED,
     (S.BLOCKED, Sig.APPROVAL_GRANTED): S.IMPLEMENTING,
     (S.VERIFYING, Sig.VERDICTS_PASS): S.ACCEPTED,
     (S.VERIFYING, Sig.VERDICTS_FAIL): S.REMEDIATING,
