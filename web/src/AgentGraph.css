@@ -275,3 +275,78 @@
   .vsi-node-glow { animation: none; opacity: 0.4; }
   .vsi-rework-arc { animation: none; }
 }
+
+/* ── 탭 ─────────────────────────────────────────────────────────────── */
+.vsi-tabs { display: flex; gap: 4px; }
+
+.vsi-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.vsi-tab:hover { color: var(--text); }
+.vsi-tab.on {
+  background: var(--panel-2);
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+/* ── 기획 게이트 승인 배너 ───────────────────────────────────────────────
+   `blocked` 는 사람만 풀 수 있는 상태다(리컨실러의 ACTIVE 집합에 없다).
+   그래서 이것은 "알림"이 아니라 **유일한 출구**다 — 두 탭 모두에서 보이도록
+   내용 위에 띠로 둔다. 3D 장면을 덮지 않는 것도 그래서다.                   */
+.vsi-state-pill.blocked { border-color: #d9a04f; color: #e8c07a; }
+
+.vsi-gate {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  background: #161208;
+  border: 1px solid #6b4f22;
+  border-radius: 10px;
+  padding: 13px 18px;
+  margin-bottom: 14px;
+}
+
+.vsi-gate-main { flex: 1 1 320px; min-width: 0; }
+
+.vsi-gate-title { font-size: 13.5px; font-weight: 700; color: #e8c07a; margin-bottom: 5px; }
+
+.vsi-gate-body { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--text-muted); }
+.vsi-gate-body b { color: #e8c07a; font-weight: 600; }
+
+.vsi-gate-actions { display: flex; align-items: center; gap: 11px; flex-wrap: wrap; }
+
+.vsi-gate-btn {
+  background: #d9a04f;
+  border: 0;
+  border-radius: 7px;
+  padding: 9px 18px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #17120a;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.vsi-gate-btn:disabled { opacity: 0.55; cursor: default; }
+
+.vsi-gate-hint { font-size: 11px; color: var(--text-muted); opacity: 0.8; }
+
+.vsi-gate-error { margin: 8px 0 0; font-size: 11.5px; color: var(--c-fail); }
+
+.vsi-office-loading {
+  display: grid;
+  place-content: center;
+  height: clamp(420px, 62vh, 760px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
