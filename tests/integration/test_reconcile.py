@@ -44,6 +44,11 @@ ALL_PASS = "scenarios/all_pass.yaml"
 ALL_PASS_SLOW = "scenarios/all_pass_slow.yaml"
 QA_FAILS_TWICE = "scenarios/qa_fails_twice.yaml"
 VERDICTS_FAIL_TWICE = "scenarios/verdicts_fail_twice.yaml"
+#: SIGKILL 테스트 전용. verdict 순서는 위와 같고 지연만 다르다 — 지연이 없으면
+#: 관측해야 할 상태 창이 폴링 간격(200ms)보다 짧아 kill 지점을 운으로만 맞힌다
+#: (실측: verifying 창이 119·66·48ms 였고 약 20% 확률로 놓쳤다). 시나리오 파일
+#: 주석에 측정값과 이유를 적어 뒀다.
+VERDICTS_FAIL_TWICE_SLOW = "scenarios/verdicts_fail_twice_slow.yaml"
 
 RECOVERY_TIMEOUT_S = 90.0
 
@@ -369,7 +374,7 @@ async def test_orchestrator_sigkill_mid_run_still_completes(point, predicate) ->
     # 그 삭제와 이 테스트의 첫 폴링은 경합한다 — 지난 실행(이미 accepted)을 이번
     # 실행으로 착각하면 kill이 허공에 떨어진다(실측).
     await purge(rid)
-    run = asyncio.create_task(run_scenario(VERDICTS_FAIL_TWICE, rid, "회원가입"))
+    run = asyncio.create_task(run_scenario(VERDICTS_FAIL_TWICE_SLOW, rid, "회원가입"))
     try:
         at_kill = await wait_for(
             rid, predicate, timeout_s=KILL_POINT_TIMEOUT_S, what=f"kill 지점 {point}"
