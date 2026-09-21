@@ -161,7 +161,13 @@ async def test_restart_does_not_lose_events_written_while_down() -> None:
 
         ws = await _connect_with_retry()
         try:
-            msg = await _recv_until(ws, aggregate_id, timeout_s=15.0)
+            # 컨테이너를 막 띄운 직후다. WS 핸드셰이크가 받아들여졌다고 펌프가
+            # 이미 백로그를 읽은 것은 아니다 — 연결 성공과 첫 펌프 틱 사이에
+            # 간격이 있다. 하네스의 `BOOT_TIMEOUT_S`(120초)가 "kill·재기동을
+            # 반복하면 도커가 느려진다(실측 60초 초과)"를 근거로 잡힌 값인데,
+            # 여기만 15초를 쓰면 같은 파일 안에서 기준이 어긋난다. 전체 스위트
+            # 부하에서 이 단언이 간헐적으로 타임아웃했다(실측).
+            msg = await _recv_until(ws, aggregate_id, timeout_s=60.0)
         finally:
             await ws.close()
 

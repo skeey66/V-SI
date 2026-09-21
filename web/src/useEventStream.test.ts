@@ -99,4 +99,39 @@ describe("reduceEvents", () => {
     expect(s.escalationAgent).toBe("dev");
     expect(s.escalationFailureClass).toBe("timeout");
   });
+
+  it("tool_result 를 받으면 에이전트의 현재 동작을 기록한다", () => {
+    const s = reduceEvents(initialStreamState(), {
+      event_id: 1, aggregate: "requirement", aggregate_id: "REQ-1",
+      event_type: "tool_result",
+      payload: { agent: "dev", tool: "write_file", revision: 1, ok: true, detail: "calc.py 에 썼다" },
+    });
+    expect(s.activity.dev).toContain("write_file");
+  });
+
+  it("도구 이벤트는 워크플로 상태를 바꾸지 않는다", () => {
+    // 자문 이벤트다 — 상태를 유도하면 안 된다 (스펙 §8.1)
+    const before = reduceEvents(initialStreamState(), {
+      event_id: 1, aggregate: "requirement", aggregate_id: "REQ-1",
+      event_type: "state_changed", payload: { to: "implementing", signal: "plan_ready" },
+    });
+    const after = reduceEvents(before, {
+      event_id: 2, aggregate: "requirement", aggregate_id: "REQ-1",
+      event_type: "tool_result",
+      payload: { agent: "qa", tool: "run_tests", revision: 1, ok: false, exit_code: 1, detail: "실패" },
+    });
+    expect(after.requirementState).toBe(before.requirementState);
+    expect(after.lastFailedVerifier).toBe(before.lastFailedVerifier);
+  });
+
+  it("이미 본 도구 이벤트는 중복 반영하지 않는다", () => {
+    const evt: VsiEvent = {
+      event_id: 7, aggregate: "requirement", aggregate_id: "REQ-1",
+      event_type: "tool_result",
+      payload: { agent: "dev", tool: "read_file", revision: 1, ok: true, detail: "" },
+    };
+    const once = reduceEvents(initialStreamState(), evt);
+    const twice = reduceEvents(once, evt);
+    expect(twice.activity).toEqual(once.activity);
+  });
 });

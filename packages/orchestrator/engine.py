@@ -61,6 +61,30 @@ logger = logging.getLogger(__name__)
 #: 순서가 두 곳에 적히면 갈라진다. 읽히지 않는 쪽을 지웠다.
 VERIFIERS = ["qa", "security"]
 
+#: verdict 를 **종료 코드에서** 받는 에이전트. `VERIFIERS` 의 상위집합이다.
+#:
+#: 기획은 검증자가 아니다(환류를 만들지 않는다). 그런데 verdict 는 갖는다 —
+#: 자기가 쓴 인수 테스트가 검사할 값어치가 있는지를 `check_acceptance_tests`
+#: 가 판정하기 때문이다. 그 FAIL 은 환류가 아니라 **승인 대기**를 만든다.
+VERDICT_AGENTS = [*VERIFIERS, "planner"]
+
+
+def build_feedback(artifacts: list[dict], revision: int) -> list[dict]:
+    """직전 회차 검증자 아티팩트로 환류 피드백을 만든다.
+
+    LLM 에이전트는 무엇이 왜 반려됐는지 알아야 고칠 수 있다 (스펙 §4.3).
+    완료 기준 4 가 요구하는 "환류가 실제 실패 출력에 근거한다"의 출발점이다.
+    """
+    if revision <= 1:
+        return []
+    previous = revision - 1
+    return [
+        {"agent": a["agent"], "verdict": a["verdict"], "summary": a.get("summary", "")}
+        for a in artifacts
+        if a.get("revision") == previous and a.get("verdict") is not None
+    ]
+
+
 TASK_SUBMITTED = "submitted"
 TASK_WORKING = "working"
 TASK_COMPLETED = "completed"
@@ -227,6 +251,32 @@ class WorkflowEngine:
                     "attempt": attempt,
                 },
             )
+            # 환류 피드백은 회차 1엔 존재할 수 없다(직전 회차가 없다) — 매
+            # 디스패치마다 무의미한 조회를 돌리지 않도록 회차 2 이상에서만 쓴다.
+            artifacts: list[dict] = []
+            if req.revision > 1:
+                rows = (
+                    await s.execute(
+                        select(Artifact, WorkflowTask)
+                        .join(WorkflowTask, Artifact.producer_task == WorkflowTask.task_id)
+                        .where(Artifact.requirement_id == requirement_id)
+                    )
+                ).all()
+                artifacts = [
+                    {
+                        "revision": t.revision,
+                        "agent": t.agent,
+                        "verdict": t.verdict,
+                        "summary": a.content.get("summary", ""),
+                    }
+                    for a, t in rows
+                ]
+            dispatch_payload = {
+                "requirement_id": requirement_id,
+                "title": req.title,
+                "revision": req.revision,
+                "feedback": build_feedback(artifacts, req.revision),
+            }
             await s.commit()
             task_id = task.task_id
 
@@ -241,7 +291,7 @@ class WorkflowEngine:
         while True:
             try:
                 a2a_id = await asyncio.wait_for(
-                    client.submit({"requirement_id": requirement_id}, key),
+                    client.submit(dispatch_payload, key),
                     timeout=self._timeouts.tool_s,
                 )
                 break
@@ -491,7 +541,7 @@ class WorkflowEngine:
 
             t.state = TASK_COMPLETED
             t.completed_at = datetime.now(timezone.utc)
-            if t.agent in VERIFIERS:
+            if t.agent in VERDICT_AGENTS:
                 # 에이전트의 주장이 아니라 종료 코드가 판정을 만든다.
                 #
                 # **판정 여부도 에이전트가 정하지 않는다.** 예전에는
@@ -545,6 +595,24 @@ class WorkflowEngine:
         나서 전이하면 그 둘 사이가 다시 창이 되어, 막으려던 경합이 그대로 남는다.
         """
         if finished_agent == "planner":
+            # 기획 게이트. 기획이 쓴 인수 테스트가 아무것도 검사하지 않으면
+            # (구현이 없는데 통과했거나, 하나도 수집되지 않았거나) 개발을
+            # 보내지 않는다 — 목표가 비어 있으면 개발은 무엇을 만들어도
+            # "맞다"를 받을 수 없고, 환류만 상한까지 헛돈다.
+            #
+            # 실측(실제 LLM 실행 2회): REQ-CART 는 수집 0개로 환류 1회,
+            # REQ-SITE 는 `assert True` 본문으로 환류 3회를 다 쓰고 1시간
+            # 18분 뒤에 escalated 로 끝났다. 둘 다 기획 직후에 알 수 있었다.
+            #
+            # 판정은 여기서도 모델이 아니라 도구의 종료 코드가 한다
+            # (`task_completed` 가 `VERDICT_AGENTS` 에 대해 verdict 를 찍는다).
+            if await self._planner_gate_failed(requirement_id):
+                if not await self._transition(
+                    requirement_id, WorkflowSignal.APPROVAL_REQUIRED,
+                    expected=RequirementState.PLANNED,
+                ):
+                    return
+                return
             if not await self._transition(
                 requirement_id, WorkflowSignal.PLAN_READY,
                 expected=RequirementState.PLANNED,
@@ -566,6 +634,52 @@ class WorkflowEngine:
             # 검증 에이전트는 자기 차례에 전이를 만들지 않는다. 판정은 두 verdict가
             # 모두 모였을 때만 일어나고, 그 전제 검사는 maybe_finish가 갖고 있다.
             await self.maybe_finish(requirement_id)
+
+    async def _planner_gate_failed(self, requirement_id: str) -> bool:
+        """이 회차 기획 Task 가 FAIL 판정을 받았는지 본다.
+
+        verdict 가 `None` 인 행은 통과로 본다 — 게이트가 생기기 전에 만들어진
+        행뿐이다(마이그레이션). 실제 산출 경로는 둘 다 `exit_code` 를 반드시
+        찍으므로 여기서 `None` 을 볼 일이 없다: `loop.py` 는 판정 도구를 가진
+        역할에 대해 무조건 찍고(안 불렀으면 `LoopFailed`), `stub_agent` 는
+        verdict 가 없는 역할에 `exit_code = 0` 을 찍는다. 즉 **스텁 모드는
+        게이트에 걸리지 않는다** — SP1 의 데모와 통합 시험이 그대로 돈다.
+        """
+        async with self._sm() as s:
+            verdict = (
+                await s.execute(
+                    select(WorkflowTask.verdict)
+                    .where(
+                        WorkflowTask.requirement_id == requirement_id,
+                        WorkflowTask.agent == "planner",
+                        WorkflowTask.state == TASK_COMPLETED,
+                    )
+                    .order_by(WorkflowTask.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+        return verdict == "FAIL"
+
+    async def approve(self, requirement_id: str) -> bool:
+        """사람이 승인 대기를 푼다. 풀렸으면 True.
+
+        `BLOCKED` 는 리컨실러의 `ACTIVE` 집합에 없으므로 자동으로는 절대
+        풀리지 않는다 — 이 메서드만이 유일한 출구다.
+
+        없는 요구사항에는 `LookupError` 를 던진다 — `state_of` 와 같은 계약이다.
+        먼저 존재를 확인하는 이유: `_transition` 의 `scalar_one()` 은 행이 없으면
+        `NoResultFound` 를 던지는데 그것은 `LookupError` 가 아니라서 API 경계가
+        404 로 옮기지 못하고 500 이 된다(실측으로 잡았다 — 오타 난 요구사항 ID 로
+        승인을 누르면 서버 고장처럼 보였다).
+        """
+        await self.state_of(requirement_id)
+        if not await self._transition(
+            requirement_id, WorkflowSignal.APPROVAL_GRANTED,
+            expected=RequirementState.BLOCKED,
+        ):
+            return False
+        await self.dispatch_agent(requirement_id, "dev")
+        return True
 
     async def _transition(
         self,
@@ -813,6 +927,48 @@ class WorkflowEngine:
         if not transitioned:
             logger.info(
                 "포기 전이를 건너뛴다: %s는 %s를 기대했으나 이미 움직였다",
+                requirement_id, observed.value,
+            )
+
+    async def give_up_on_budget(self, requirement_id: str) -> None:
+        """요구사항 전체 시간 예산(`run_s`)을 넘긴 요구사항을 강제로 포기시킨다.
+
+        (Task 11 리뷰 라운드 1) `give_up`과 근거가 다르다 — `give_up`은 "이
+        에이전트의 재시도 예산이 바닥났다"는, 특정 실패 행에서 나오는 관측을
+        실행한다. `run_s` backstop은 특정 행이 아니라 요구사항이 태어난 뒤로
+        흐른 시간 자체가 근거이므로, 원인이 된 실패 행이 아예 없을 수 있다 —
+        예를 들어 REMEDIATING인데 이번 회차의 dev Task가 아직 하나도 없는
+        채로 전체 예산을 다 쓴 경우. 그래서 이 메서드는 `agent`도
+        `failure_class`도 요구하지 않는다.
+
+        `give_up`은 REMEDIATING을 일부러 건너뛴다(`remediate`의 회차 상한
+        소관이라서다) — 하지만 `remediate`의 회차 상한은 "Task 행 개수"를
+        보므로 시간 축과는 별개다. 시간 예산은 네 ACTIVE 상태 모두에서 똑같이
+        걸려야 하고, `LIMIT_EXCEEDED`는 그 넷 전부에서 ESCALATED로 가는 합법
+        전이다(`workflow.py`) — 그래서 여기서는 관측한 상태를 그대로
+        `expected`로 넘겨 네 상태 어디서 불려도 동작한다.
+        """
+        async with self._sm() as s:
+            req = await s.get(WorkflowRequirement, requirement_id)
+        if req is None:
+            return
+        observed = RequirementState(req.state)
+        if observed not in (
+            RequirementState.PLANNED,
+            RequirementState.IMPLEMENTING,
+            RequirementState.VERIFYING,
+            RequirementState.REMEDIATING,
+        ):
+            return  # 이미 종료 상태다 — 다른 경로가 먼저 끝냈다.
+        transitioned = await self._transition(
+            requirement_id,
+            WorkflowSignal.LIMIT_EXCEEDED,
+            expected=observed,
+            extra={"reason": "run_budget_exceeded", "revision": req.revision},
+        )
+        if not transitioned:
+            logger.info(
+                "예산 초과 포기 전이를 건너뛴다: %s는 %s를 기대했으나 이미 움직였다",
                 requirement_id, observed.value,
             )
 

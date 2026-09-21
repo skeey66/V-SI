@@ -31,6 +31,11 @@ OLD = 600.0  # 충분히 오래된 나이(초) — stale이지만 아직 stuck�
 # 다른 모든 테스트가 기본 나이로 OLD(600초)를 쓰므로, stuck 문턱은 그보다
 # 훨씬 커야 "그냥 오래 머문 행"과 "stuck 안전망 대상"이 섞이지 않는다.
 STUCK_AFTER_S = OLD * 2  # 1200초
+# Task 11: run_s backstop. 이 파일의 모든 요구사항은 OLD(600초)나 STUCK_AFTER_S
+# (1200초) 안쪽에서 나이를 먹으므로, run_s를 그보다 훨씬 크게 잡아 이 파일의
+# 기존 시나리오들이 run_s backstop과 우연히 겹치지 않게 한다(run_s 자체의
+# 동작은 tests/orchestrator/test_run_budget.py가 전담해서 고정한다).
+RUN_S = STUCK_AFTER_S * 10  # 12000초
 
 
 def _req(state: RequirementState, revision: int = 1, age_s: float = OLD):
@@ -73,7 +78,7 @@ def _task(
 
 
 def _plan(req, rows):
-    return next_action(req, rows, NOW, STALE_AFTER_S, STUCK_AFTER_S)
+    return next_action(req, rows, NOW, STALE_AFTER_S, STUCK_AFTER_S, RUN_S)
 
 
 # --------------------------------------------------------- 케이스 1: 유령 working
@@ -191,7 +196,7 @@ def test_terminal_requirement_is_never_touched() -> None:
 def test_fresh_requirement_without_tasks_is_left_to_the_dispatcher() -> None:
     """방금 만들어진 요구사항은 아직 디스패치 중일 수 있다 — 끼어들지 않는다."""
     req = _req(RequirementState.PLANNED, age_s=0.5)
-    assert next_action(req, [], NOW, STALE_AFTER_S, STUCK_AFTER_S) is None
+    assert next_action(req, [], NOW, STALE_AFTER_S, STUCK_AFTER_S, RUN_S) is None
 
 
 def test_previous_revision_rows_do_not_count_as_progress() -> None:

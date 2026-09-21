@@ -100,10 +100,16 @@ FORCE_FAIL = "force_fail"  # PROBE로도 안 끝난다 — 더 묻지 않고 실
 
 DEFAULT_INTERVAL_S = 2.0
 DEFAULT_STALE_AFTER_S = 5.0
-#: 이보다 오래 열린 채면 에이전트 응답을 더 기다리지 않는다(SDK 결함 안전망).
-#: `stale_after_s`보다 한 자릿수 이상 커야 한다 — 정상적으로 느린 실행까지
-#: 강제로 끊으면 안 되고, SDK가 종료 상태를 영영 안 줄 때만 걸려야 한다.
-DEFAULT_STUCK_AFTER_S = 60.0
+#: 열린 행의 나이 천장. SP1 은 60초였다 — 스텁이 초 단위로 끝났기 때문이다.
+#: SP2 의 LLM 작업은 몇 분이 기본이라 60초를 두면 **정상 작업이 전부 강제
+#: 실패당한다**(SP1 스펙 §12.3 이 경고한 그대로다). 에이전트가 자기 예산
+#: 600초를 스스로 집행하므로(스펙 §9.2), 이 천장은 그보다 큰 값으로 두어
+#: "느린 작업"이 아니라 "죽은 프로세스"만 잡게 한다.
+DEFAULT_STUCK_AFTER_S = 900.0
+#: `Reconciler`를 `run_s`를 지정하지 않고 만드는 테스트(`test_operational_
+#: signals.py`)를 위한 기본값일 뿐이다 — 운영에서는 항상 `main.py`가
+#: `timeouts.run_s`(policy.TimeoutConfig, 기본 3600초)를 명시적으로 넘긴다.
+DEFAULT_RUN_S = 3600.0
 
 
 @dataclass(frozen=True)
@@ -161,6 +167,7 @@ def next_action(
     now: datetime,
     stale_after_s: float,
     stuck_after_s: float,
+    run_s: float,
 ) -> Action | None:
     """관측에서 다음 동작 하나를 고른다. 순수 함수 — 부수 효과가 없다.
 
@@ -172,6 +179,25 @@ def next_action(
         return None
     if (now - last_activity(req, rows)).total_seconds() < stale_after_s:
         return None  # 진행 중일 수 있다 — 손대지 않는다.
+
+    # 요구사항 전체 시간 예산(Task 11, 스펙 SP1 §12.2 → SP2). SP1 은 배선하지
+    # 않았다 — 스텁은 초 단위로 끝나 시간 축 규칙이 필요 없었기 때문이다.
+    # SP2 에서 실제 LLM 지연이 붙어 "느린 것"과 "멈춘 것"을 나이만으로 가르기
+    # 어려워졌고, 그래서 요구사항에도 상한이 필요해졌다.
+    #
+    # **원칙: 예산은 새 일을 막을 뿐, 이미 끝난 일을 버리지 않는다.** (리뷰
+    # 라운드 1) 처음 구현은 이 검사를 함수 맨 앞, ACTIVE 게이트보다도 앞에
+    # 두었다 — 그러면 마지막 검증자가 이미 PASS를 써서 FINISH를 돌려줘야 할
+    # 요구사항이, 같은 폴링에서 나이가 run_s를 넘겼다는 이유만으로 GIVE_UP을
+    # 받는다. 실제로 끝난 작업을 "느리다"와 구분 없이 버리는 것이라 예산의
+    # 취지에 어긋난다. 그래서 이 검사는 **여기**(ACTIVE·staleness 게이트
+    # 다음, 그러나 각 상태별 분기 안에서 DISPATCH/PROBE/REMEDIATE처럼 새
+    # 일을 만드는 결정보다는 앞)에 둔다 — 아래에서 `over_budget`으로 참조해
+    # ADVANCE·FINISH·FORCE_FAIL·(실패 행 근거가 있는) GIVE_UP은 그대로 두고,
+    # 그 외에 새로 일을 만들려는 지점만 GIVE_UP으로 바꿔치기한다. 예산을 넘긴
+    # 요구사항이 완료 직전이었다면 한 틱을 더 살아 끝날 수 있다는 뜻이고,
+    # 그것이 옳은 트레이드오프다.
+    over_budget = (now - req.created_at).total_seconds() > run_s
 
     current = [t for t in rows if t.revision == req.revision]
     open_rows = tuple(t for t in current if t.state in OPEN_TASK_STATES)
@@ -187,6 +213,12 @@ def next_action(
         )
         if stuck:
             return Action(FORCE_FAIL, tasks=stuck)
+        if over_budget:
+            # PROBE는 새로 물어보는 것 자체가 "더 기다린다"는 뜻이다 — 예산을
+            # 넘겼으면 더 묻지 않고 포기한다. 근거가 된 특정 행이 없으므로
+            # `tasks`는 비운다(`Reconciler._execute`가 `engine.give_up_on_budget`
+            # 로 상태 기반 강제 종료를 부른다).
+            return Action(GIVE_UP)
         # 열려 있는데 오래 조용하다. 추측하지 않고 에이전트에 직접 묻는다.
         return Action(PROBE, tasks=open_rows)
 
@@ -198,6 +230,8 @@ def next_action(
         exhausted = _exhausted_row(current, "planner")
         if exhausted is not None:
             return Action(GIVE_UP, ("planner",), tasks=(exhausted,))
+        if over_budget:
+            return Action(GIVE_UP)
         return Action(DISPATCH, ("planner",))
     if state is S.IMPLEMENTING:
         if "dev" in done:
@@ -205,6 +239,8 @@ def next_action(
         exhausted = _exhausted_row(current, "dev")
         if exhausted is not None:
             return Action(GIVE_UP, ("dev",), tasks=(exhausted,))
+        if over_budget:
+            return Action(GIVE_UP)
         return Action(DISPATCH, ("dev",))
     if state is S.VERIFYING:
         missing = tuple(v for v in VERIFIERS if v not in done)
@@ -215,8 +251,14 @@ def next_action(
         )
         if exhausted_rows:
             return Action(GIVE_UP, tuple(t.agent for t in exhausted_rows), tasks=exhausted_rows)
+        if over_budget:
+            return Action(GIVE_UP)
         return Action(DISPATCH, missing)
-    return Action(REMEDIATE)  # S.REMEDIATING
+    # S.REMEDIATING — REMEDIATE도 새 revision·새 dev Task를 만드는 결정이므로
+    # 예산 검사 대상이다.
+    if over_budget:
+        return Action(GIVE_UP)
+    return Action(REMEDIATE)
 
 
 class Reconciler:
@@ -227,12 +269,14 @@ class Reconciler:
         interval_s: float = DEFAULT_INTERVAL_S,
         stale_after_s: float = DEFAULT_STALE_AFTER_S,
         stuck_after_s: float = DEFAULT_STUCK_AFTER_S,
+        run_s: float = DEFAULT_RUN_S,
     ) -> None:
         self._sm = session_maker
         self._engine = engine
         self._interval = interval_s
         self._stale_after = stale_after_s
         self._stuck_after = stuck_after_s
+        self._run_s = run_s
         # 운영 신호 1(Task 14): 같은 task_id가 PROBE된 반복 횟수. a2a-sdk 1.1.2가
         # 종료 전이를 누락하면(리컨실러 docstring 참고) 이 값이 매 주기 계속
         # 올라간다 — "PROBE가 비정상적으로 오래 반복된다"는 그 자체로는 로그를
@@ -296,7 +340,7 @@ class Reconciler:
                 )
             ).scalars().all()
             action = next_action(
-                req, list(rows), now, self._stale_after, self._stuck_after
+                req, list(rows), now, self._stale_after, self._stuck_after, self._run_s
             )
 
         if action is None:
@@ -354,14 +398,26 @@ class Reconciler:
             elif action.kind == REMEDIATE:
                 await self._engine.remediate(requirement_id)
             elif action.kind == GIVE_UP:
-                # 여러 에이전트가 동시에 예산을 다 썼어도(드물다 — qa·security가
-                # 같은 주기에 함께 소진) 전이는 한 번만 성공한다. 첫 번째 뒤엔
-                # 상태가 이미 ESCALATED라 이후 호출은 engine.give_up의 expected
-                # 가드에 걸려 조용히 반환된다 — 두 번째 이후 에이전트의 사유는
-                # 이벤트에 남지 않지만, 상태 전이가 중복되거나 터지지는 않는다.
-                for task in action.tasks:
-                    fc = FailureClass(task.failure_class) if task.failure_class else FailureClass.EXECUTION
-                    await self._engine.give_up(requirement_id, task.agent, fc)
+                if action.tasks:
+                    # 여러 에이전트가 동시에 예산을 다 썼어도(드물다 — qa·security가
+                    # 같은 주기에 함께 소진) 전이는 한 번만 성공한다. 첫 번째 뒤엔
+                    # 상태가 이미 ESCALATED라 이후 호출은 engine.give_up의 expected
+                    # 가드에 걸려 조용히 반환된다 — 두 번째 이후 에이전트의 사유는
+                    # 이벤트에 남지 않지만, 상태 전이가 중복되거나 터지지는 않는다.
+                    for task in action.tasks:
+                        fc = FailureClass(task.failure_class) if task.failure_class else FailureClass.EXECUTION
+                        await self._engine.give_up(requirement_id, task.agent, fc)
+                else:
+                    # 리뷰 라운드 1 회귀 수정: `run_s` backstop은 특정 실패 행이
+                    # 아니라 요구사항 나이 자체가 근거라 `tasks`가 비어 있을 수
+                    # 있다(예: REMEDIATING인데 이번 회차에 Task가 아직 하나도
+                    # 없는 채로 예산을 다 쓴 경우). 이전에는 이 분기가 없어서
+                    # `tasks`가 비면 위 for 루프가 통째로 건너뛰어져 아무 일도
+                    # 일어나지 않았다 — 요구사항이 영원히 ACTIVE에 머물며 매
+                    # 주기 "→ give_up" 로그만 남기고 실제로는 아무것도 포기하지
+                    # 않았다. `give_up_on_budget`은 특정 에이전트에 기대지 않고
+                    # 관측된 상태를 그대로 강제 종료한다.
+                    await self._engine.give_up_on_budget(requirement_id)
             elif action.kind == FORCE_FAIL:
                 # 리뷰 라운드 1: PROBE로도 끝나지 않는 행(SDK 결함으로 종료 상태가
                 # 영영 안 오는 경우)에 대한 안전망. 더 묻지 않고 실행 중 원인

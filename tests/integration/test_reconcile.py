@@ -29,6 +29,7 @@ from orchestrator.idempotency import idempotency_key
 from orchestrator.models import WorkflowRequirement, WorkflowTask
 from orchestrator.workflow import TERMINAL, RequirementState
 from tests.integration.harness import (
+    BOOT_TIMEOUT_S,
     ScenarioResult,
     db_session,
     kill_orchestrator,
@@ -43,8 +44,30 @@ ALL_PASS = "scenarios/all_pass.yaml"
 ALL_PASS_SLOW = "scenarios/all_pass_slow.yaml"
 QA_FAILS_TWICE = "scenarios/qa_fails_twice.yaml"
 VERDICTS_FAIL_TWICE = "scenarios/verdicts_fail_twice.yaml"
+#: SIGKILL 테스트 전용. verdict 순서는 위와 같고 지연만 다르다 — 지연이 없으면
+#: 관측해야 할 상태 창이 폴링 간격(200ms)보다 짧아 kill 지점을 운으로만 맞힌다
+#: (실측: verifying 창이 119·66·48ms 였고 약 20% 확률로 놓쳤다). 시나리오 파일
+#: 주석에 측정값과 이유를 적어 뒀다.
+VERDICTS_FAIL_TWICE_SLOW = "scenarios/verdicts_fail_twice_slow.yaml"
 
 RECOVERY_TIMEOUT_S = 90.0
+
+#: kill 지점에 도달할 때까지의 대기.
+#:
+#: `wait_for` 는 `run_scenario` 와 **동시에** 돈다. 그런데 `run_scenario` 는
+#: 워크플로를 시작하기 전에 `reset_agents` 로 에이전트 컨테이너 4개를 재생성하고
+#: `_wait_healthy(BOOT_TIMEOUT_S)` 로 기다린다. 즉 이 예산에는 부팅이 통째로
+#: 들어간다 — 원래 값 60초는 촉박한 정도가 아니라 **하네스가 스스로 합법이라고
+#: 선언한 부팅 시간(120초) 안에서 구조적으로 충족 불가능**했다. 전체 스위트
+#: 부하에서 간헐적으로 터진 이유가 이것이다(실측).
+#:
+#: `BOOT_TIMEOUT_S` 를 그대로 쓰지 않고 여유를 더하는 이유: 그 값과 같게 두면
+#: 부팅이 허용된 예산을 다 쓰는 순간 이 대기도 같은 시점에 만료돼 같은 결함이
+#: 확률만 낮춘 채 남는다. 상수를 임포트해 결합을 눈에 보이게 한다.
+#:
+#: 이 대기는 부팅 시간이 지배하므로 **디스패치 지연 회귀를 잡지 못한다** —
+#: 살아있음(liveness) 가드로만 읽어야 한다.
+KILL_POINT_TIMEOUT_S = BOOT_TIMEOUT_S + 60.0
 
 
 @pytest.fixture(scope="module")
@@ -351,10 +374,10 @@ async def test_orchestrator_sigkill_mid_run_still_completes(point, predicate) ->
     # 그 삭제와 이 테스트의 첫 폴링은 경합한다 — 지난 실행(이미 accepted)을 이번
     # 실행으로 착각하면 kill이 허공에 떨어진다(실측).
     await purge(rid)
-    run = asyncio.create_task(run_scenario(VERDICTS_FAIL_TWICE, rid, "회원가입"))
+    run = asyncio.create_task(run_scenario(VERDICTS_FAIL_TWICE_SLOW, rid, "회원가입"))
     try:
         at_kill = await wait_for(
-            rid, predicate, timeout_s=60.0, what=f"kill 지점 {point}"
+            rid, predicate, timeout_s=KILL_POINT_TIMEOUT_S, what=f"kill 지점 {point}"
         )
         # kill이 종료 뒤에 도착하면 이 테스트는 아무것도 시험하지 않는다.
         assert at_kill.state not in TERMINAL, f"{point}: 이미 끝난 뒤였다"
@@ -391,7 +414,7 @@ async def test_result_matches_uninterrupted_run() -> None:
         at_kill = await wait_for(
             rid,
             lambda r: any(t.agent == "planner" for t in r.tasks),
-            timeout_s=60.0,
+            timeout_s=KILL_POINT_TIMEOUT_S,
             what="planner 디스패치",
         )
         assert at_kill.state not in TERMINAL, "kill이 종료 뒤에 도착했다"

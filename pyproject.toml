@@ -14,6 +14,14 @@ dependencies = [
   "opentelemetry-instrumentation-fastapi",
   "opentelemetry-instrumentation-httpx",
   "opentelemetry-exporter-otlp",
+  "bandit>=1.7.0",
+  # 워크스페이스 컨테이너의 `run_tests` 가 부르는 실행 파일이다. 개발 의존성이
+  # 아니라 도구 서버의 런타임 의존성이다 — `dev` extra 에만 두면 이미지에
+  # 들어가지 않아 QA 가 매번 "pytest 가 설치되지 않았습니다" 로 FAIL 한다
+  # (실측: 3회차 전부 그 사유로 반려, 모델이 아니라 인프라 탓이었다).
+  # `bandit` 이 여기 있는 것과 같은 이유다.
+  "pytest>=8.3",
+  "mcp>=2.2.0,<3.0.0",
 ]
 
 [project.optional-dependencies]
@@ -22,7 +30,11 @@ dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "websockets>=13.0"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-pythonpath = ["packages"]
+pythonpath = ["packages", "services"]
+markers = [
+  "llm: 실제 로컬 모델을 부른다. 느리고 비결정적이다. CI 기본 실행에서 제외한다.",
+]
+addopts = "-m 'not llm'"
 
 [tool.setuptools.packages.find]
 where = ["packages"]
