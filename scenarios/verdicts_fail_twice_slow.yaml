@@ -1,0 +1,25 @@
+# `verdicts_fail_twice` 와 verdict 순서가 같고 지연만 넣은 변종.
+#
+# **SIGKILL 테스트 전용이다.** 그 테스트는 kill 시점을 시계가 아니라 DB 에서
+# 관측되는 상태에 고정하는데(`KILL_POINTS`), 지연이 없으면 관측할 창 자체가
+# 폴링 간격보다 짧아 운으로만 잡힌다. 실측한 창 길이(지연 없는 원본):
+#
+#   implementing  240ms · 223ms · 224ms
+#   verifying     119ms ·  66ms ·  48ms      <- POLL_INTERVAL_S = 200ms
+#
+# 시나리오 전체가 1초 만에 끝나는데 그 안에서 50~120ms 짜리 창을 200ms 폴링으로
+# 맞히라는 것이라, `verifying` 킬 지점이 약 20% 확률로 "이미 accepted 였다"며
+# 실패했다(실측: 전체 스위트 반복 실행에서 재현).
+#
+# `all_pass_slow.yaml` 이 같은 이유로 지연을 넣는다 — 그쪽 주석 참고
+# ("kill 이 실행 **도중에** 떨어지게 하기 위해서다").
+#
+# 원본에 지연을 더하지 않고 파일을 나누는 이유: `verdicts_fail_twice` 는 Task 11
+# 의 환류 루프 시험들이 쓴다. 그쪽은 창을 관측할 필요가 없고, 지연을 얹으면
+# 아무 이득 없이 느려지기만 한다.
+scenario: verdicts_fail_twice_slow
+agents:
+  planner:  { verdicts: [], latency_ms: 1200 }
+  dev:      { verdicts: [], latency_ms: 1200 }
+  qa:       { verdicts: [FAIL, FAIL, PASS], latency_ms: 1200 }
+  security: { verdicts: [FAIL, PASS, PASS], latency_ms: 1200 }
