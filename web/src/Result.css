@@ -1,0 +1,219 @@
+.vsi-result { display: grid; gap: 14px; }
+
+.vsi-result-empty {
+  padding: 48px 20px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.vsi-res-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+
+.vsi-res-h {
+  margin: 0 0 11px;
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  font-weight: 700;
+}
+
+.vsi-res-title { margin: 0 0 10px; font-size: 16px; line-height: 1.6; color: var(--text); }
+
+.vsi-res-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.vsi-res-id { font-family: var(--font-mono); font-size: 11px; opacity: 0.6; }
+
+.vsi-res-state {
+  padding: 4px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.vsi-res-state.accepted { border-color: var(--c-pass); color: var(--c-pass); }
+.vsi-res-state.escalated { border-color: var(--c-fail); color: var(--c-fail); }
+.vsi-res-state.blocked { border-color: #d9a04f; color: #e8c07a; }
+
+.vsi-res-check { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 12px; }
+.vsi-res-check:last-child { margin-bottom: 0; }
+
+.vsi-res-verdict {
+  flex: none;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  margin-top: 1px;
+}
+.vsi-res-verdict.pass { background: #1d4a3f; color: #6fe0c0; }
+.vsi-res-verdict.fail { background: #4a2020; color: #f0a0a0; }
+
+.vsi-res-summary {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+}
+
+.vsi-res-dim { color: var(--text-faint); font-weight: 400; }
+.vsi-res-good { color: var(--c-pass); font-size: 12px; }
+.vsi-res-bad { color: var(--c-fail); font-size: 12px; }
+.vsi-res-warn { margin-left: 8px; color: #e8c07a; font-size: 11px; }
+
+.vsi-res-group { margin-bottom: 16px; }
+.vsi-res-group:last-child { margin-bottom: 0; }
+.vsi-res-grouphead { font-size: 12.5px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+
+.vsi-res-file { margin-bottom: 10px; }
+.vsi-res-filename {
+  font: 600 11.5px var(--font-mono);
+  color: #e0b168;
+  margin-bottom: 4px;
+}
+.vsi-res-file pre {
+  margin: 0;
+  padding: 11px 13px;
+  background: #0b0e14;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font: 11.5px/1.7 var(--font-mono);
+  color: #b9c6d6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.vsi-res-hist { margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.9; color: var(--text-muted); }
+
+/* ── 요청 입력 + 실행 고르기 ─────────────────────────────────────────── */
+.vsi-ask { display: flex; gap: 10px; align-items: stretch; margin-bottom: 14px; }
+
+.vsi-ask textarea {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  padding: 12px 14px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  resize: none;
+  height: 60px;
+}
+
+.vsi-ask button {
+  background: #d97757;
+  border: 0;
+  border-radius: 9px;
+  padding: 0 22px;
+  color: #1a1207;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.vsi-ask button:disabled { opacity: 0.5; cursor: default; }
+
+.vsi-picker { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; font-size: 12px; color: var(--text-muted); }
+.vsi-picker select {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+}
+.vsi-ask-error { margin: -6px 0 12px; font-size: 12px; color: var(--c-fail); }
+
+/* 상태 배지 색은 `stateTone` 이 고른다 — 상태 이름마다 규칙을 흩뿌리지 않는다. */
+.vsi-res-state.good { border-color: var(--c-pass); color: var(--c-pass); }
+.vsi-res-state.bad { border-color: var(--c-fail); color: var(--c-fail); }
+.vsi-res-state.warn { border-color: #d9a04f; color: #e8c07a; }
+.vsi-res-state.busy { border-color: #4a5a72; color: #9fb4d2; }
+
+.vsi-res-inline-code {
+  margin: 7px 0;
+  padding: 9px 12px;
+  background: #0b0e14;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: 11.5px/1.7 var(--font-mono);
+  color: #9fd7c0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+}
+
+/* 평소엔 한 줄 — 결과를 읽는 동안 입력창이 화면을 먹지 않게. */
+.vsi-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+
+.vsi-bar-new {
+  background: #d97757;
+  border: 0;
+  border-radius: 8px;
+  padding: 9px 16px;
+  color: #1a1207;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.vsi-bar-pick {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 9px 11px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.vsi-ask-side { display: flex; flex-direction: column; gap: 6px; }
+.vsi-ask-cancel {
+  background: transparent !important;
+  border: 1px solid var(--line-strong) !important;
+  color: var(--text-muted) !important;
+  font-weight: 400 !important;
+  font-size: 11.5px !important;
+  padding: 5px 16px !important;
+}
+
+.vsi-res-headrow { display: flex; align-items: center; gap: 12px; margin-bottom: 11px; }
+.vsi-res-headrow .vsi-res-h { margin: 0; }
+.vsi-res-dl {
+  margin-left: auto;
+  background: var(--panel-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  padding: 6px 13px;
+  color: var(--text);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.vsi-res-dl:hover { border-color: #6fe0c0; color: #6fe0c0; }
