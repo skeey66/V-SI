@@ -1,4 +1,4 @@
-"""MCP 가 노출하는 도구 5종.
+"""MCP 가 노출하는 도구 6종.
 
 모든 함수가 예외 대신 `ToolResult` 를 돌려준다. 도구 오류는 모델이 보고 고쳐야
 하는 정보이지 프로세스를 죽일 사건이 아니다 (스펙 §6.1).
@@ -12,7 +12,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from tool_server.paths import PathEscape, resolve_within
 
@@ -105,11 +105,43 @@ def read_file(root: Path, path: str) -> ToolResult:
     return ToolResult(ok=True, detail=raw.decode("utf-8", errors="replace"))
 
 
-def write_file(root: Path, path: str, content: str) -> ToolResult:
+#: 인수 테스트로 보는 경로. 개발 에이전트는 여기에 쓸 수 없다.
+#:
+#: 인수 테스트는 **개발이 받는 목표**다. 목표를 피검증자가 고쳐 쓸 수 있으면
+#: QA 의 판정이 판정이 아니게 된다 — 반려당한 개발이 구현 대신 검사 항목을
+#: 고쳐서 통과시킬 수 있기 때문이다.
+#:
+#: 실측 근거(REQ-SITE-101435, 실제 LLM 실행): 개발이 1회차에 기획이 쓴
+#: `test_booking.py` 를 통째로 덮어썼고, QA 는 그 덮어쓴 테스트로 판정했다.
+#:
+#: 판별은 `resolve_within` 이 정규화한 **상대 경로**에 대고 한다 —
+#: `./sub/../test_x.py` 같은 우회를 문자열 검사로 막으려 하지 않는다.
+def is_acceptance_test_path(relative: str) -> bool:
+    parts = PurePosixPath(relative).parts
+    if any(p == "tests" for p in parts):
+        return True
+    name = parts[-1] if parts else ""
+    if name == "conftest.py":
+        return True
+    return (name.startswith("test_") or name.endswith("_test.py")) and name.endswith(".py")
+
+
+def write_file(
+    root: Path, path: str, content: str, *, forbid_tests: bool = False
+) -> ToolResult:
     try:
         target = resolve_within(root, path)
     except PathEscape as exc:
         return ToolResult(ok=False, detail=str(exc))
+    if forbid_tests and is_acceptance_test_path(target.relative_to(root).as_posix()):
+        return ToolResult(
+            ok=False,
+            detail=(
+                f"{path} 은 인수 테스트다 — 이 역할은 테스트 파일을 고칠 수 없다. "
+                "테스트는 네가 통과시켜야 할 목표이지 고쳐 쓸 대상이 아니다. "
+                "구현 파일을 고쳐라."
+            ),
+        )
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
@@ -189,4 +221,70 @@ def run_security_scan(root: Path) -> ToolResult:
     return _run(
         root,
         [sys.executable, "-m", "bandit", "-r", ".", "-q", "-x", _SECURITY_SCAN_EXCLUDE],
+    )
+
+
+#: pytest 종료코드 중 "인수 테스트가 제구실을 한다"는 증거가 되는 값.
+#: 1 = 테스트가 실패했다, 2 = 수집 중 에러(부를 대상이 없어 import 실패).
+#: 구현이 하나도 없는 워크스페이스에서는 **둘 중 하나여야 정상**이다.
+_MEANINGFUL_RED_EXITS = (1, 2)
+
+
+def check_acceptance_tests(root: Path) -> ToolResult:
+    """기획이 쓴 인수 테스트가 검사할 값어치가 있는지 판정한다.
+
+    구현이 아직 하나도 없는 워크스페이스에서 그 테스트를 그대로 돌린다. 쓸 만한
+    인수 테스트라면 **반드시 실패한다** — 부를 함수가 없기 때문이다(TDD 의 red
+    단계). 통과한다면 그 테스트는 아무것도 검사하지 않는다는 뜻이고, 하나도
+    수집되지 않는다면 검사할 것 자체가 없다는 뜻이다.
+
+    **판정은 여기서도 모델이 하지 않는다.** 이 함수는 pytest 의 종료코드를
+    뒤집어 옮길 뿐이다 — "테스트가 실패했다"(pytest 1)가 이 도구에서는
+    "합격"(0)이고, "테스트가 통과했다"(pytest 0)가 "불합격"(1)이다.
+
+    실측 근거(실제 LLM 실행 2회, 구현 없는 워크스페이스에서 측정):
+      REQ-CART-095427  모듈 최상단 assert 만 있어 수집 0개  → pytest exit 5
+      REQ-SITE-101435  본문이 `assert True`                → pytest exit 0 (4 passed)
+    둘 다 개발이 받을 목표가 비어 있었고, 각각 환류 1회·3회를 헛돌았다.
+    """
+    inner = _run(root, [sys.executable, "-m", "pytest", "-q", "--no-header"])
+    if inner.exit_code in _MEANINGFUL_RED_EXITS:
+        return ToolResult(
+            ok=True,
+            exit_code=0,
+            detail=(
+                "확인 항목이 제구실을 한다: 구현이 없는 상태에서 예상대로 실패했다.\n"
+                f"(pytest 종료코드 {inner.exit_code})\n{inner.detail}"
+            ),
+        )
+    if inner.exit_code == 0:
+        return ToolResult(
+            ok=False,
+            exit_code=1,
+            detail=(
+                "확인 항목이 아무것도 검사하지 않는다: 구현이 하나도 없는데 "
+                "테스트가 전부 통과했다. 무엇을 만들어도 통과한다는 뜻이다.\n"
+                "테스트 본문이 비어 있거나(`assert True`, `pass`) 검사할 함수를 "
+                "import 하지 않았을 가능성이 높다.\n"
+                f"{inner.detail}"
+            ),
+        )
+    if inner.exit_code == 5:
+        return ToolResult(
+            ok=False,
+            exit_code=1,
+            detail=(
+                "확인 항목이 하나도 수집되지 않았다. pytest 는 `def test_...()` "
+                "형태의 함수만 테스트로 본다 — 모듈 최상단의 `assert` 는 세지 "
+                "않는다.\n"
+                f"{inner.detail}"
+            ),
+        )
+    return ToolResult(
+        ok=False,
+        exit_code=1,
+        detail=(
+            f"확인 항목을 돌려보지 못했다 (pytest 종료코드 {inner.exit_code}).\n"
+            f"{inner.detail}"
+        ),
     )

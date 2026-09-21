@@ -20,6 +20,7 @@ import logging
 import os
 
 from fastapi import FastAPI, HTTPException
+from sqlalchemy import select
 from pydantic import BaseModel
 
 from a2a.server.tasks import DatabaseTaskStore
@@ -28,7 +29,7 @@ from agent_runtime.telemetry import instrument_app, instrumented_client, setup_t
 from orchestrator.a2a_client import AgentClient
 from orchestrator.db import make_engine, session_factory
 from orchestrator.engine import DuplicateRequirement, WorkflowEngine
-from orchestrator.models import Base
+from orchestrator.models import Artifact, Base, WorkflowRequirement, WorkflowTask
 from orchestrator.policy import TimeoutConfig
 from orchestrator.push_receiver import create_push_router
 from orchestrator.reconciler import (
@@ -142,13 +143,176 @@ async def start_requirement(body: StartRequirement) -> dict[str, str]:
     return {"requirement_id": body.requirement_id, "accepted": "true"}
 
 
+#: 지난 실행을 찾을 수 있게 하는 유일한 경로다.
+#:
+#: 이벤트 게이트웨이는 **생중계만** 한다(연결 시점 이후, 스냅샷 없음). 그래서
+#: 화면을 새로고침하면 방금 끝난 실행조차 사라진다 — 무엇이 만들어졌는지
+#: 확인할 방법이 없다는 뜻이다. 이 목록이 그 자리를 메운다.
+@app.get("/requirements")
+async def list_requirements(limit: int = 50) -> list[dict]:
+    """최근 요구사항 목록. 새 것부터."""
+    capped = max(1, min(limit, 200))
+    async with maker() as s:
+        rows = (
+            await s.execute(
+                select(WorkflowRequirement)
+                .order_by(WorkflowRequirement.created_at.desc())
+                .limit(capped)
+            )
+        ).scalars().all()
+    return [
+        {
+            "requirement_id": r.requirement_id,
+            "title": r.title,
+            "state": r.state,
+            "revision": r.revision,
+            "max_revisions": r.max_revisions,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rows
+    ]
+
+
 @app.get("/requirements/{requirement_id}")
-async def get_requirement(requirement_id: str) -> dict[str, str]:
+async def get_requirement(requirement_id: str) -> dict:
+    """요구사항 하나의 현재 모습.
+
+    `title`·`revision` 을 함께 돌려준다 — 화면이 "무엇을 요청했는지"를 보여주려면
+    필요하고, 이벤트 스트림에는 그 정보가 실리지 않는다.
+
+    `tasks` 는 회차별 진행 이력이다. 끝난 실행을 나중에 열었을 때 "몇 번 고쳤고
+    누가 반려했는지"를 알 수 있는 유일한 근거다(이벤트는 지나가면 사라진다).
+    """
+    async with maker() as s:
+        req = await s.get(WorkflowRequirement, requirement_id)
+        if req is None:
+            raise HTTPException(status_code=404, detail="unknown requirement") from None
+        tasks = (
+            await s.execute(
+                select(WorkflowTask)
+                .where(WorkflowTask.requirement_id == requirement_id)
+                .order_by(WorkflowTask.created_at)
+            )
+        ).scalars().all()
+    return {
+        "requirement_id": req.requirement_id,
+        "title": req.title,
+        "state": req.state,
+        "revision": req.revision,
+        "max_revisions": req.max_revisions,
+        "created_at": req.created_at.isoformat() if req.created_at else None,
+        "tasks": [
+            {
+                "agent": t.agent,
+                "revision": t.revision,
+                "state": t.state,
+                "verdict": t.verdict,
+                "failure_class": t.failure_class,
+            }
+            for t in tasks
+        ],
+    }
+
+
+@app.post("/requirements/{requirement_id}/approve", status_code=200)
+async def approve_requirement(requirement_id: str) -> dict[str, str]:
+    """기획 게이트에 걸려 멈춘 요구사항을 사람이 푼다.
+
+    `blocked` 는 리컨실러가 건드리지 않는 상태다(`reconciler.ACTIVE` 참고) —
+    이 경로만이 유일한 출구다. 그래서 인증은 SP3 의 숙제로 남아 있고(스펙
+    §14.3 의 `/message:send` 와 같은 구멍), 지금은 도커 내부 네트워크 안에서만
+    닿는다는 사실에 기대고 있다.
+
+    멱등하다: 이미 풀린(또는 애초에 blocked 가 아닌) 요구사항에 대고 불러도
+    409 를 내지 않고 현재 상태를 그대로 돌려준다 — `_transition` 이 전제를
+    스스로 검사하고 조용히 물러나기 때문이다.
+    """
     try:
+        granted = await workflow.approve(requirement_id)
         state: RequirementState = await workflow.state_of(requirement_id)
     except LookupError:
         raise HTTPException(status_code=404, detail="unknown requirement") from None
-    return {"requirement_id": requirement_id, "state": state.value}
+    return {
+        "requirement_id": requirement_id,
+        "state": state.value,
+        "granted": "true" if granted else "false",
+    }
+
+
+#: 산출물 조회는 **목록과 내용을 나눈다.**
+#:
+#: `content["files"]` 는 산출물 하나당 200KB 까지 간다
+#: (`llm_agent.loop.FILE_SNAPSHOT_TOTAL_CAP_BYTES`). 회차가 쌓이면 한 요구사항의
+#: 파일을 전부 합쳐 실어 보내는 것은 화면이 첫 로드에 감당할 무게가 아니다.
+#: 목록은 누가 무엇을 냈는지만 알려주고(작다), 파일은 사람이 그 팀을 클릭할 때
+#: 받는다.
+@app.get("/requirements/{requirement_id}/artifacts")
+async def list_artifacts(requirement_id: str) -> list[dict]:
+    """이 요구사항이 낸 산출물 목록. 파일 **내용은 싣지 않는다**."""
+    await _require_requirement(requirement_id)
+    async with maker() as s:
+        rows = (
+            await s.execute(
+                select(Artifact)
+                .where(Artifact.requirement_id == requirement_id)
+                .order_by(Artifact.version, Artifact.kind)
+            )
+        ).scalars().all()
+    out: list[dict] = []
+    for a in rows:
+        files = a.content.get("files")
+        out.append(
+            {
+                "kind": a.kind,
+                "version": a.version,
+                "agent": a.content.get("agent", ""),
+                "verdict": a.content.get("verdict"),
+                "summary": a.content.get("summary", ""),
+                # 검증자 산출물에는 `files` 키가 아예 없다(스펙 §5.1: 쓰기 권한이
+                # 없는 역할에 빈 dict 를 넣느니 키를 뺐다). 그 구분을 그대로 넘긴다.
+                "file_names": sorted(files) if isinstance(files, dict) else [],
+                "truncated": bool(a.content.get("files_truncated")),
+            }
+        )
+    return out
+
+
+@app.get("/requirements/{requirement_id}/artifacts/{kind}/{version}")
+async def get_artifact_files(requirement_id: str, kind: str, version: int) -> dict:
+    """산출물 하나의 파일 내용."""
+    await _require_requirement(requirement_id)
+    async with maker() as s:
+        row = (
+            await s.execute(
+                select(Artifact).where(
+                    Artifact.requirement_id == requirement_id,
+                    Artifact.kind == kind,
+                    Artifact.version == version,
+                )
+            )
+        ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown artifact")
+    files = row.content.get("files")
+    return {
+        "kind": row.kind,
+        "version": row.version,
+        "agent": row.content.get("agent", ""),
+        "summary": row.content.get("summary", ""),
+        "files": files if isinstance(files, dict) else {},
+    }
+
+
+async def _require_requirement(requirement_id: str) -> None:
+    """없는 요구사항이면 404. 있으면 조용히 통과.
+
+    빈 목록과 "그런 요구사항 없음"을 구분하려고 둔다 — 오타 난 ID 에 빈 배열을
+    돌려주면 화면은 "아직 아무것도 안 나왔다"로 읽는다.
+    """
+    try:
+        await workflow.state_of(requirement_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="unknown requirement") from None
 
 
 @app.get("/healthz")

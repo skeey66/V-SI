@@ -27,7 +27,14 @@ class Role:
 
 
 ROLES: dict[str, Role] = {
-    "planner": Role("planner", "requirements", ("write_file",), False, None),
+    # 기획은 검증 에이전트가 아니다(qa/security 처럼 환류를 만들지 않는다).
+    # 그런데 `verdict_tool` 은 갖는다 — 자기가 쓴 인수 테스트가 **검사할
+    # 값어치가 있는지**를 도구에 물어야 하기 때문이다. 판정은 여기서도 모델이
+    # 아니라 종료코드가 한다.
+    "planner": Role(
+        "planner", "requirements",
+        ("write_file", "check_acceptance_tests"), False, "check_acceptance_tests",
+    ),
     "dev": Role("dev", "source_code", ("list_files", "read_file", "write_file"), False, None),
     "qa": Role("qa", "test_report", ("list_files", "read_file", "run_tests"), True, "run_tests"),
     "security": Role(
@@ -43,13 +50,23 @@ _PROMPTS = {
         "2. `test_*.py` — 그 명세를 검사하는 pytest 인수 테스트\n\n"
         "인수 테스트가 개발 에이전트의 유일한 목표다. 함수 이름과 시그니처와 "
         "기대값을 테스트에 명확히 박아라. 구현은 하지 마라 — 테스트만 쓴다.\n"
-        "테스트는 표준 라이브러리만 쓴다. 외부 패키지를 import 하지 마라."
+        "테스트는 표준 라이브러리만 쓴다. 외부 패키지를 import 하지 마라.\n\n"
+        "테스트는 `def test_...()` 형태의 함수로 써라. 모듈 최상단의 `assert` 는 "
+        "pytest 가 테스트로 세지 않는다.\n"
+        "본문을 비워두지 마라 — `assert True` 나 `pass` 만 있는 테스트는 무엇을 "
+        "만들어도 통과하므로 개발 에이전트에게 아무 목표도 주지 못한다. 만들 "
+        "함수를 `import` 해서 실제로 호출하고 결과를 단언해라.\n\n"
+        "파일을 다 쓴 뒤 마지막에 `check_acceptance_tests` 를 반드시 호출해라. "
+        "구현이 아직 없으므로 **테스트가 실패하는 것이 정상**이다 — 그게 "
+        "테스트가 제구실을 한다는 증거다. 통과했다면 네 테스트가 아무것도 "
+        "검사하지 않고 있다는 뜻이니 고쳐 쓰고 다시 호출해라."
     ),
     "dev": (
         "너는 개발 에이전트다. 워크스페이스의 인수 테스트를 읽고, 그것을 "
         "통과시키는 구현을 작성한다.\n\n"
-        "먼저 `list_files` 와 `read_file` 로 테스트를 읽어라. 테스트 파일은 "
-        "수정하지 마라 — 구현 파일만 쓴다.\n"
+        "먼저 `list_files` 와 `read_file` 로 테스트를 읽어라. **테스트 파일에는 "
+        "쓸 수 없다** — `write_file` 이 거부한다. 테스트는 네가 통과시켜야 할 "
+        "목표이지 고쳐 쓸 대상이 아니다. 구현 파일만 쓴다.\n"
         "표준 라이브러리만 쓴다. 외부 패키지를 import 하지 마라."
     ),
     "qa": (

@@ -84,10 +84,17 @@ async def test_tasks_carry_verdicts_and_distinct_idempotency_keys() -> None:
     assert all(t.revision == 1 and t.attempt == 1 for t in result.tasks)
     assert all(t.revision_of is None for t in result.tasks)
 
-    # verdict는 검증 에이전트에서만 나오고, 종료 코드에서 도출된다.
+    # verdict 는 언제나 종료 코드에서 도출된다 — 에이전트의 주장이 아니다.
+    #
+    # 기획도 verdict 를 갖는다(기획 게이트). `check_acceptance_tests` 가 인수
+    # 테스트를 구현 없는 상태에서 돌려보고 "검사할 값어치가 있는가"를 판정한다.
+    # 다만 기획은 **검증자가 아니다** — 그 FAIL 은 환류가 아니라 승인 대기
+    # (`blocked`)를 만든다. 스텁 모드에는 그 도구가 없고 `exit_code = 0` 이
+    # 그대로 찍히므로 여기서는 PASS 다(스텁 경로가 게이트에 걸리지 않는다는
+    # 것이 이 단언의 요점이다 — 걸렸다면 이 시나리오는 accepted 에 닿지 못한다).
     assert by_agent["qa"].verdict == "PASS"
     assert by_agent["security"].verdict == "PASS"
-    assert by_agent["planner"].verdict is None
+    assert by_agent["planner"].verdict == "PASS"
     assert by_agent["dev"].verdict is None
 
     keys = {t.idempotency_key for t in result.tasks}

@@ -186,29 +186,20 @@ async def test_verdict_nudge_respects_the_turn_cap() -> None:
     assert "턴" in str(exc.value)
 
 
-async def test_non_verifier_that_calls_no_tools_fails_without_a_nudge() -> None:
-    """dev/planner 가 도구를 하나도 안 부르고 턴을 끝내면 그 자체로 EXECUTION
-    실패다 (스펙 §5.3, §10 실패표 — "도구 호출 0회"는 무조건 EXECUTION
-    실패다). 다만 검증자 전용 nudge 경로는 타지 않는다 — 정정 대상은
-    "판정 도구를 안 불렀다"는 검증자 특유의 계약 위반이지, 비검증자가 그냥
-    아무것도 안 한 것을 재촉해서 고칠 성질이 아니다. 그래서 재시도 없이
-    첫 턴 만에 `LoopFailed` 로 끝나야 한다.
+async def test_role_without_verdict_tool_that_calls_no_tools_fails_without_a_nudge() -> None:
+    """판정 도구가 없는 역할(dev)이 도구를 하나도 안 부르고 턴을 끝내면 그
+    자체로 EXECUTION 실패다 (스펙 §5.3, §10 실패표 — "도구 호출 0회"는 무조건
+    EXECUTION 실패다). 다만 nudge 경로는 타지 않는다 — 정정 대상은 "판정 도구를
+    안 불렀다"는 계약 위반이지, 판정할 것이 없는 역할이 그냥 아무것도 안 한 것을
+    재촉해서 고칠 성질이 아니다. 그래서 재시도 없이 첫 턴 만에 끝나야 한다.
 
     (이전 버전의 이 시험은 정반대 — `result.turns == 1`로 "정상 종료"를
-    단언했다. 그게 바로 이 수정이 없애는 버그다: 기획이 프리텍스트만 남기고
-    아무 파일도 안 써도 `exit_code=0`짜리 "성공" 산출물이 기록됐다.)"""
-    llm = _ScriptedLlm([ChatReply(content="설계만 하고 끝냈다")])
-    with pytest.raises(LoopFailed) as exc:
-        await run_loop(
-            role=ROLES["planner"], llm=llm, bridge=_RecordingBridge(), schemas=[],
-            title="계산기", revision=1, feedback=[],
-        )
-    assert "도구" in str(exc.value)
-    assert len(llm.seen) == 1  # nudge 없이 첫 턴 만에 실패 확정.
+    단언했다. 그게 바로 이 수정이 없앤 버그다: 모델이 프리텍스트만 남기고
+    아무 파일도 안 써도 `exit_code=0`짜리 "성공" 산출물이 기록됐다.)
 
-
-async def test_dev_that_calls_no_tools_fails() -> None:
-    """같은 실패가 dev 에도 적용된다 — planner 전용 버그가 아니다."""
+    (이 시험은 원래 planner 로 짰다. 기획이 `check_acceptance_tests` 를 갖게
+    되면서 기획은 nudge 를 받는 역할이 됐고 — 아래 시험이 그쪽을 맡는다 —
+    "nudge 없이 즉시 실패"의 표본은 dev 가 됐다.)"""
     llm = _ScriptedLlm([ChatReply(content="음, 어렵네")])
     with pytest.raises(LoopFailed) as exc:
         await run_loop(
@@ -216,6 +207,23 @@ async def test_dev_that_calls_no_tools_fails() -> None:
             title="계산기", revision=1, feedback=[],
         )
     assert "도구" in str(exc.value)
+    assert len(llm.seen) == 1  # nudge 없이 첫 턴 만에 실패 확정.
+
+
+async def test_planner_that_calls_no_tools_is_nudged_then_fails() -> None:
+    """기획은 `check_acceptance_tests` 를 갖게 되면서 nudge 대상이 됐다.
+
+    판정 도구를 가진 역할이면 검증자든 아니든 재촉을 받는다 — 근거 없는 통과를
+    만들지 않기 위해서다. 재촉을 다 쓰고도 도구를 하나도 안 불렀으면 "도구 호출
+    0회" 로 실패한다(그쪽이 더 구체적인 진단이라 먼저 걸린다)."""
+    llm = _ScriptedLlm([ChatReply(content="설계만 하고 끝냈다")] * (MAX_VERDICT_NUDGES + 1))
+    with pytest.raises(LoopFailed) as exc:
+        await run_loop(
+            role=ROLES["planner"], llm=llm, bridge=_RecordingBridge(), schemas=[],
+            title="계산기", revision=1, feedback=[],
+        )
+    assert "도구" in str(exc.value)
+    assert len(llm.seen) == MAX_VERDICT_NUDGES + 1
 
 
 async def test_non_verifier_payload_has_no_verdict() -> None:

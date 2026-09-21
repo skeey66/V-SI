@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 from tool_server.tools import (
+    check_acceptance_tests,
     OUTPUT_TAIL_BYTES,
     READ_LIMIT_BYTES,
     list_files,
@@ -230,4 +231,103 @@ def test_security_scan_still_flags_real_issues_in_implementation(tmp_path: Path)
     )
     result = run_security_scan(tmp_path)
     assert result.exit_code != 0
+    assert not result.ok
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# check_acceptance_tests — 구현이 없는 방에서 인수 테스트를 돌려 "빨간가" 본다.
+#
+# 아래 두 시험은 실제 LLM 실행에서 나온 산출물을 그대로 옮긴 것이다. 지어낸
+# 실패 모양이 아니라 **실제로 두 번 겪은 실패 모양**이다.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_acceptance_tests_that_pass_without_an_implementation_are_rejected(
+    tmp_path: Path,
+) -> None:
+    """REQ-SITE-101435 재현: 본문이 `assert True` 였다.
+
+    구현이 하나도 없는데 4개가 전부 통과했다(pytest exit 0). 개발이 무엇을
+    만들어도 통과하므로 목표가 되지 못한다. 이 도구는 그것을 **불합격**(1)로
+    옮긴다 — pytest 의 0 이 여기서는 0 이 아니다.
+    """
+    write_file(
+        tmp_path,
+        "test_booking.py",
+        "import pytest\n\n"
+        "@pytest.mark.parametrize('room,expected', [(1, True), (2, False)])\n"
+        "def test_book_room(room, expected):\n"
+        "    # 실제 로직 검증 코드가 여기에 있어야 함\n"
+        "    assert True\n",
+    )
+    result = check_acceptance_tests(tmp_path)
+    assert result.exit_code == 1
+    assert not result.ok
+    assert "아무것도 검사하지 않는다" in result.detail
+
+
+def test_acceptance_tests_that_collect_nothing_are_rejected(tmp_path: Path) -> None:
+    """REQ-CART-095427 재현: 모듈 최상단 `assert` 만 썼다.
+
+    pytest 는 `def test_...()` 만 테스트로 본다. 최상단 assert 는 import 시점에
+    한 번 돌고 끝이라 수집 결과가 0개다(exit 5). 검사할 것이 없으므로 불합격.
+    """
+    write_file(
+        tmp_path,
+        "test_cart.py",
+        "def total(items):\n    return sum(items)\n\n"
+        "assert total([1, 2]) == 3\n",
+    )
+    result = check_acceptance_tests(tmp_path)
+    assert result.exit_code == 1
+    assert not result.ok
+    assert "수집되지 않았다" in result.detail
+
+
+def test_acceptance_tests_that_fail_for_the_right_reason_are_accepted(
+    tmp_path: Path,
+) -> None:
+    """쓸 만한 인수 테스트는 구현이 없으면 **import 에서** 터진다(pytest exit 2).
+
+    이것이 정상이다 — 부를 대상이 아직 없다는 뜻이고, 그래서 개발에게 줄
+    목표가 된다.
+    """
+    write_file(
+        tmp_path,
+        "test_booking.py",
+        "from booking import add_booking\n\n"
+        "def test_conflict():\n"
+        "    assert add_booking('A', '10:00', '11:00') is True\n",
+    )
+    result = check_acceptance_tests(tmp_path)
+    assert result.exit_code == 0
+    assert result.ok
+    assert "제구실을 한다" in result.detail
+
+
+def test_acceptance_tests_that_assert_a_wrong_expectation_are_accepted(
+    tmp_path: Path,
+) -> None:
+    """구현이 **있는데** 틀린 경우도 합격이다(pytest exit 1).
+
+    이 도구는 "테스트가 무언가를 실제로 단언하는가"만 본다. 기획 직후에는
+    워크스페이스에 구현이 없지만, 기획이 스스로 더미를 써 두는 경우까지
+    막을 이유는 없다 — 단언이 살아 있으면 목표로 쓸 수 있다.
+    """
+    write_file(tmp_path, "calc.py", "def add(a, b):\n    return 0\n")
+    write_file(
+        tmp_path,
+        "test_calc.py",
+        "from calc import add\n\ndef test_add():\n    assert add(1, 2) == 3\n",
+    )
+    result = check_acceptance_tests(tmp_path)
+    assert result.exit_code == 0
+    assert result.ok
+
+
+def test_empty_workspace_is_rejected(tmp_path: Path) -> None:
+    """기획이 `spec.md` 만 쓰고 테스트를 안 쓴 경우도 걸린다."""
+    write_file(tmp_path, "spec.md", "# 명세\n두 수를 더한다.\n")
+    result = check_acceptance_tests(tmp_path)
+    assert result.exit_code == 1
     assert not result.ok

@@ -367,7 +367,7 @@ async def run_loop(
             # 정상적인 도구 호출 반복을 감안해 넉넉히 잡힌 턴·시간 예산 전체를
             # "판정 도구를 안 부른다"는 같은 실수를 반복하는 데 다 쓸 수 있다.
             if (
-                role.is_verifier
+                role.verdict_tool is not None
                 and verdict_exit_code is None
                 and verdict_nudges_used < MAX_VERDICT_NUDGES
             ):
@@ -403,10 +403,15 @@ async def run_loop(
                 # `await None` 이 즉시 `TypeError` 로 죽어, 계약 위반이 첫
                 # 호출에서 바로 드러난다.
                 await on_tool(call.name, call.arguments, result)
-            if role.is_verifier and call.name == role.verdict_tool:
+            if role.verdict_tool is not None and call.name == role.verdict_tool:
                 verdict_exit_code = result.get("exit_code")
                 verdict_detail = result.get("detail", "")
-            if not role.is_verifier and call.name == "write_file" and result.get("ok"):
+            # 파일 스냅샷은 **`write_file` 권한이 있는 역할**이면 남긴다.
+            # 예전에는 `not role.is_verifier` 로 갈랐는데, 기획이 판정 도구를
+            # 갖게 되면서 그 조건이 두 가지 서로 다른 질문("판정을 내는가"와
+            # "파일을 쓰는가")을 하나로 뭉뚱그리게 됐다. 기획은 판정 도구를
+            # 가지면서 동시에 파일을 쓰는 유일한 역할이다.
+            if "write_file" in role.tools and call.name == "write_file" and result.get("ok"):
                 # 성공한 쓰기만 산출물이다 — 경로 탈출 등으로 거부된
                 # 쓰기(`ok: False`)는 실행이 실패한 것이므로 스냅샷에
                 # 들어가면 안 된다.
@@ -429,22 +434,24 @@ async def run_loop(
         # 메시지는 "도구는 불렀지만 판정 도구는 아니었다"는 경우에만 나온다.
         raise LoopFailed(f"{role.name} 이 도구를 한 번도 호출하지 않고 끝났다")
 
-    if role.is_verifier and verdict_exit_code is None:
+    if role.verdict_tool is not None and verdict_exit_code is None:
         # 근거 없는 통과를 만드느니 실패시킨다 (스펙 §5.3).
         raise LoopFailed(f"{role.name} 이 판정 도구({role.verdict_tool})를 호출하지 않았다")
 
     payload: dict = {"kind": role.artifact_kind, "agent": role.name}
-    if role.is_verifier:
+    if role.verdict_tool is not None:
         payload["exit_code"] = verdict_exit_code
         payload["verdict"] = "PASS" if verdict_exit_code == 0 else "FAIL"
         payload["summary"] = reply.content or verdict_detail
     else:
         payload["exit_code"] = 0
         payload["summary"] = reply.content
-        # 검증자는 `write_file` 권한 자체가 없다(스펙 §5.1) — 그런 역할의
-        # payload에 항상 빈 `files: {}`를 넣느니, 이 산출물 종류엔 "쓴 파일"
-        # 이라는 개념이 아예 없다는 뜻으로 키를 통째로 뺀다(present-and-empty
-        # 가 아니라 absent를 선택했다).
+
+    # 검증자(qa/security)는 `write_file` 권한 자체가 없다(스펙 §5.1) — 그런
+    # 역할의 payload에 항상 빈 `files: {}`를 넣느니, 이 산출물 종류엔 "쓴 파일"
+    # 이라는 개념이 아예 없다는 뜻으로 키를 통째로 뺀다(present-and-empty 가
+    # 아니라 absent를 선택했다).
+    if "write_file" in role.tools:
         payload["files"] = files
         if files_truncated:
             payload["files_truncated"] = True

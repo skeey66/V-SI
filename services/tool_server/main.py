@@ -72,7 +72,7 @@ WORKSPACE_BASE = Path(os.environ.get("VSI_WORKSPACE_BASE", "/workspace"))
 #: 등록/미등록함으로써 이뤄진다** — 표만 두고 등록을 안 하면 이 표는 순수
 #: 함수 테스트만 통과시키는 죽은 선언이 된다.
 TOOLS_BY_ROLE: dict[str, tuple[str, ...]] = {
-    "planner": ("write_file",),
+    "planner": ("write_file", "check_acceptance_tests"),
     "dev": ("list_files", "read_file", "write_file"),
     "qa": ("list_files", "read_file", "run_tests"),
     "security": ("list_files", "read_file", "run_security_scan"),
@@ -128,6 +128,26 @@ def write_file(requirement_id: str, path: str, content: str) -> dict[str, Any]:
     return {"ok": r.ok, "detail": r.detail}
 
 
+def dev_write_file(requirement_id: str, path: str, content: str) -> dict[str, Any]:
+    """워크스페이스에 파일을 쓴다. 인수 테스트 파일은 쓸 수 없다."""
+    try:
+        root = _ctx_root(requirement_id)
+    except PathEscape as exc:
+        return {"ok": False, "detail": str(exc)}
+    r = tools.write_file(root, path, content, forbid_tests=True)
+    return {"ok": r.ok, "detail": r.detail}
+
+
+def check_acceptance_tests(requirement_id: str) -> dict[str, Any]:
+    """기획이 쓴 인수 테스트가 검사할 값어치가 있는지 판정한다."""
+    try:
+        root = _ctx_root(requirement_id)
+    except PathEscape as exc:
+        return {"ok": False, "detail": str(exc), "exit_code": None}
+    r = tools.check_acceptance_tests(root)
+    return {"ok": r.ok, "detail": r.detail, "exit_code": r.exit_code}
+
+
 def run_tests(requirement_id: str) -> dict[str, Any]:
     """워크스페이스에서 pytest 를 실행한다."""
     try:
@@ -154,6 +174,17 @@ _TOOL_FUNCS: dict[str, Callable[..., dict[str, Any]]] = {
     "write_file": write_file,
     "run_tests": run_tests,
     "run_security_scan": run_security_scan,
+    "check_acceptance_tests": check_acceptance_tests,
+}
+
+#: 같은 이름의 도구를 역할에 따라 다른 구현으로 등록한다.
+#:
+#: `dev` 의 `write_file` 만 인수 테스트 경로를 거부한다 — 기획은 인수 테스트를
+#: **써야 하는** 역할이므로 같은 제한을 걸면 안 된다. 이름을 `write_file` 로
+#: 유지하는 이유는 모델이 보는 도구 목록을 역할마다 다르게 만들지 않기 위해서다
+#: (다르게 하면 프롬프트도 역할마다 갈라져야 한다).
+_ROLE_TOOL_OVERRIDES: dict[tuple[str, str], Callable[..., dict[str, Any]]] = {
+    ("dev", "write_file"): dev_write_file,
 }
 
 
@@ -177,7 +208,8 @@ _ALLOWED_HOSTS = [
 def _build_role_server(role: str, tool_names: tuple[str, ...]) -> MCPServer:
     server = MCPServer(f"vsi-tools-{role}")
     for name in tool_names:
-        server.add_tool(_TOOL_FUNCS[name], name=name)
+        func = _ROLE_TOOL_OVERRIDES.get((role, name), _TOOL_FUNCS[name])
+        server.add_tool(func, name=name)
     return server
 
 

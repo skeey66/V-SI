@@ -5,7 +5,7 @@ from tool_server.main import ROLE_SERVERS, TOOLS_BY_ROLE, allowed_tools, root_fo
 
 def test_each_role_has_the_tools_the_spec_assigns() -> None:
     """스펙 §5.2 의 권한 표를 그대로 고정한다."""
-    assert TOOLS_BY_ROLE["planner"] == ("write_file",)
+    assert TOOLS_BY_ROLE["planner"] == ("write_file", "check_acceptance_tests")
     assert TOOLS_BY_ROLE["dev"] == ("list_files", "read_file", "write_file")
     assert TOOLS_BY_ROLE["qa"] == ("list_files", "read_file", "run_tests")
     assert TOOLS_BY_ROLE["security"] == ("list_files", "read_file", "run_security_scan")
@@ -84,3 +84,60 @@ def test_root_rejects_hostile_requirement_id(tmp_path) -> None:
 
     with pytest.raises(PathEscape):
         root_for_request(tmp_path, "../../etc")
+
+
+async def test_only_planner_can_check_acceptance_tests() -> None:
+    """확인 항목 점검은 기획 전용이다.
+
+    개발이 이 도구를 가지면 자기가 통과시켜야 할 목표를 미리 돌려보며 맞춰
+    갈 수 있고, 검증자가 가지면 판정 근거가 둘로 갈린다. 기획만 갖는다.
+    """
+    assert "check_acceptance_tests" in await _registered_names("planner")
+    for role in ("dev", "qa", "security"):
+        assert "check_acceptance_tests" not in await _registered_names(role)
+
+
+async def test_dev_write_file_refuses_acceptance_test_paths(tmp_path) -> None:
+    """개발의 `write_file` 만 인수 테스트 경로를 거부한다.
+
+    같은 이름의 도구지만 역할마다 다른 구현이 등록된다(`_ROLE_TOOL_OVERRIDES`).
+    선언이 아니라 **실제로 등록된 함수**를 불러서 확인한다 — 오버라이드 표에만
+    적고 등록부에 반영하지 않는 실수는 여기서만 드러난다.
+
+    실측 근거(REQ-SITE-101435): 개발이 1회차에 기획이 쓴 `test_booking.py` 를
+    통째로 덮어썼고, QA 는 그 덮어쓴 테스트로 판정했다.
+    """
+    from tool_server import tools
+
+    root = tmp_path / "ws"
+    root.mkdir()
+
+    blocked = tools.write_file(root, "test_booking.py", "def test_x(): pass", forbid_tests=True)
+    assert not blocked.ok
+    assert "테스트" in blocked.detail
+    assert not (root / "test_booking.py").exists()
+
+    # 구현 파일은 그대로 쓸 수 있어야 한다.
+    allowed = tools.write_file(root, "booking.py", "x = 1", forbid_tests=True)
+    assert allowed.ok
+    assert (root / "booking.py").read_text(encoding="utf-8") == "x = 1"
+
+    # 기획은 같은 경로에 쓸 수 있어야 한다 — 인수 테스트를 쓰는 것이 그 역할이다.
+    planner = tools.write_file(root, "test_booking.py", "def test_x(): pass")
+    assert planner.ok
+    assert (root / "test_booking.py").exists()
+
+
+async def test_dev_cannot_escape_the_test_path_guard_with_dot_segments(tmp_path) -> None:
+    """`./sub/../test_x.py` 같은 우회가 통하면 안 된다.
+
+    판별을 **정규화된 상대 경로**에 대고 하기 때문에 통하지 않는다 — 문자열
+    검사로 막으려 했다면 통했을 모양이다.
+    """
+    from tool_server import tools
+
+    root = tmp_path / "ws2"
+    root.mkdir()
+    r = tools.write_file(root, "sub/../test_sneaky.py", "x", forbid_tests=True)
+    assert not r.ok
+    assert not (root / "test_sneaky.py").exists()
