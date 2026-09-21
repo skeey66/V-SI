@@ -1,0 +1,123 @@
+.vsi-office {
+  position: relative;
+  /* 캔버스가 확실한 높이를 가져야 한다 — ResizeObserver 가 0 을 보면 렌더러가
+     1×1 로 줄어 아무것도 안 보인다. */
+  height: clamp(420px, 62vh, 760px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #07080b;
+}
+
+.vsi-office-canvas { position: absolute; inset: 0; }
+/* three 가 style 을 잡지만, 보험으로 컨테이너에 맞춘다. */
+.vsi-office-canvas canvas { display: block; width: 100% !important; height: 100% !important; }
+
+.vsi-office-hint {
+  position: absolute;
+  left: 14px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+.vsi-office-reset {
+  pointer-events: auto;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.vsi-office-error {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  padding: 24px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.vsi-office-error-detail {
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+/* ── 산출물 패널 (캐릭터 클릭) ───────────────────────────────────────── */
+.vsi-art {
+  position: absolute;
+  right: 14px;
+  top: 14px;
+  bottom: 14px;
+  width: min(420px, 46%);
+  display: flex;
+  flex-direction: column;
+  background: rgba(14, 18, 25, 0.96);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.vsi-art-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--text);
+}
+.vsi-art-rev { font-size: 11px; color: var(--text-muted); }
+.vsi-art-close {
+  margin-left: auto;
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.vsi-art-body { overflow: auto; padding: 12px 14px; }
+.vsi-art-msg { margin: 12px 14px; font-size: 12px; color: var(--text-muted); }
+
+.vsi-art-summary {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+}
+
+.vsi-art-file { margin-bottom: 12px; }
+.vsi-art-file-name {
+  font: 600 11.5px var(--font-mono);
+  color: #e0b168;
+  margin-bottom: 5px;
+}
+.vsi-art-file pre {
+  margin: 0;
+  padding: 10px 12px;
+  background: #0b0e14;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font: 11.5px/1.65 var(--font-mono);
+  color: #b9c6d6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 300px;
+  overflow: auto;
+}

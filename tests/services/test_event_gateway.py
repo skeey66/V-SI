@@ -90,7 +90,7 @@ async def test_undelivered_event_is_not_marked_and_is_retried_next_cycle(maker) 
     # 전달이 실패했으니 커서는 전진하면 안 되고, published_at도 NULL로 남아야 한다.
     assert last_id == 0
     async with maker() as s:
-        rows = (await s.execute(select(OutboxEvent))).scalars().all()
+        rows = (await s.execute(select(OutboxEvent).where(OutboxEvent.aggregate_id == "t-window"))).scalars().all()
     assert len(rows) == 1
     assert rows[0].published_at is None
     # 실패한 소켓은 다음에 재시도되지 않도록 제거된다.
@@ -109,7 +109,7 @@ async def test_undelivered_event_is_not_marked_and_is_retried_next_cycle(maker) 
     assert good_client.received[0]["aggregate_id"] == "t-window"
 
     async with maker() as s:
-        rows_after = (await s.execute(select(OutboxEvent))).scalars().all()
+        rows_after = (await s.execute(select(OutboxEvent).where(OutboxEvent.aggregate_id == "t-window"))).scalars().all()
     assert rows_after[0].published_at is not None
 
 
@@ -129,7 +129,7 @@ async def test_no_clients_skips_cycle_without_touching_db(maker) -> None:
 
     assert last_id == 0
     async with maker() as s:
-        rows = (await s.execute(select(OutboxEvent))).scalars().all()
+        rows = (await s.execute(select(OutboxEvent).where(OutboxEvent.aggregate_id == "t-idle"))).scalars().all()
     assert rows[0].published_at is None
 
 
@@ -154,7 +154,7 @@ async def test_recover_if_stale_noop_when_cursor_within_table_range(maker) -> No
             )
         )
         await s.commit()
-        row = (await s.execute(select(OutboxEvent))).scalars().first()
+        row = (await s.execute(select(OutboxEvent).where(OutboxEvent.aggregate_id == "t-normal"))).scalars().first()
 
     result = await recover_if_stale(maker, row.event_id)
 
@@ -196,7 +196,7 @@ async def test_pump_once_does_not_swallow_events_after_table_reset(maker) -> Non
     assert len(client.received) == 1, "리셋 후 새 이벤트가 삼켜졌다 — 커서 복구가 안 됐다"
     assert client.received[0]["aggregate_id"] == "t-after-reset"
     async with maker() as s:
-        rows = (await s.execute(select(OutboxEvent))).scalars().all()
+        rows = (await s.execute(select(OutboxEvent).where(OutboxEvent.aggregate_id == "t-after-reset"))).scalars().all()
     assert len(rows) == 1
     assert rows[0].published_at is not None
     assert last_id == rows[0].event_id  # 커서가 999가 아니라 실제 테이블 기준으로 전진했다
