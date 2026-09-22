@@ -23,7 +23,7 @@
 | 에이전트 | 하는 일 | 쓸 수 있는 도구 |
 |---|---|---|
 | **기획** | 명세와 인수 테스트를 쓴다 | `write_file` · `check_acceptance_tests` |
-| **개발** | 그 테스트를 통과시킨다 | `list_files` · `read_file` · `write_file` |
+| **개발** | 그 테스트를 통과시킨다 | `list_files` · `read_file` · `write_file` · `run_lint` |
 | **QA** | 테스트를 실제로 돌린다 | `list_files` · `read_file` · `run_tests` |
 | **보안** | 위험한 코드를 찾는다 | `list_files` · `read_file` · `run_security_scan` |
 
@@ -34,6 +34,10 @@
 
 같은 이유로 개발은 **인수 테스트 파일에 쓸 수 없다**. 시험지를 시험 보는 사람이
 고칠 수 있으면 채점이 채점이 아니다.
+
+개발이 가진 `run_lint` 는 판정 도구가 아니다. 오타 난 변수 이름이나 문법 오류는
+실행해 보기 전에 알 수 있고, 그걸 QA 왕복으로 발견하면 회차 하나가 통째로
+날아간다. 자기 코드를 훑는 것과 통과를 선언하는 것은 다르다.
 
 ### 에이전트끼리는 A2A, 도구와는 MCP
 
@@ -182,7 +186,7 @@ curl -X POST localhost:8000/requirements/REQ-001/approve    # 기획 게이트 �
 
 ```bash
 pip install -e ".[dev]"
-pytest tests -q --ignore=tests/integration   # 286개 — 스택 없이 돈다
+pytest tests -q --ignore=tests/integration   # 295개 — 스택 없이 돈다
 pytest tests/integration -q                  # 50개 — 스택이 떠 있어야 한다
 
 cd web && npm install && npx vitest run      # 63개
