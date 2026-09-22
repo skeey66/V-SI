@@ -6,7 +6,7 @@ from tool_server.main import ROLE_SERVERS, TOOLS_BY_ROLE, allowed_tools, root_fo
 def test_each_role_has_the_tools_the_spec_assigns() -> None:
     """스펙 §5.2 의 권한 표를 그대로 고정한다."""
     assert TOOLS_BY_ROLE["planner"] == ("write_file", "check_acceptance_tests")
-    assert TOOLS_BY_ROLE["dev"] == ("list_files", "read_file", "write_file")
+    assert TOOLS_BY_ROLE["dev"] == ("list_files", "read_file", "write_file", "run_lint")
     assert TOOLS_BY_ROLE["qa"] == ("list_files", "read_file", "run_tests")
     assert TOOLS_BY_ROLE["security"] == ("list_files", "read_file", "run_security_scan")
 
@@ -141,3 +141,15 @@ async def test_dev_cannot_escape_the_test_path_guard_with_dot_segments(tmp_path)
     r = tools.write_file(root, "sub/../test_sneaky.py", "x", forbid_tests=True)
     assert not r.ok
     assert not (root / "test_sneaky.py").exists()
+
+
+async def test_only_dev_can_run_lint() -> None:
+    """린트는 개발 전용이다.
+
+    검증자가 가지면 판정 근거가 둘로 갈린다 — PASS/FAIL 은 `run_tests` 와
+    `run_security_scan` 의 종료 코드가 정한다. 기획은 구현을 쓰지 않으므로
+    검사할 대상 자체가 없다.
+    """
+    assert "run_lint" in await _registered_names("dev")
+    for role in ("planner", "qa", "security"):
+        assert "run_lint" not in await _registered_names(role)

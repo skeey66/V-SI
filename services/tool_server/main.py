@@ -73,7 +73,7 @@ WORKSPACE_BASE = Path(os.environ.get("VSI_WORKSPACE_BASE", "/workspace"))
 #: 함수 테스트만 통과시키는 죽은 선언이 된다.
 TOOLS_BY_ROLE: dict[str, tuple[str, ...]] = {
     "planner": ("write_file", "check_acceptance_tests"),
-    "dev": ("list_files", "read_file", "write_file"),
+    "dev": ("list_files", "read_file", "write_file", "run_lint"),
     "qa": ("list_files", "read_file", "run_tests"),
     "security": ("list_files", "read_file", "run_security_scan"),
 }
@@ -148,6 +148,16 @@ def check_acceptance_tests(requirement_id: str) -> dict[str, Any]:
     return {"ok": r.ok, "detail": r.detail, "exit_code": r.exit_code}
 
 
+def run_lint(requirement_id: str) -> dict[str, Any]:
+    """문법 오류·오타 난 이름·죽은 코드를 찾는다."""
+    try:
+        root = _ctx_root(requirement_id)
+    except PathEscape as exc:
+        return {"ok": False, "detail": str(exc), "exit_code": None}
+    r = tools.run_lint(root)
+    return {"ok": r.ok, "detail": r.detail, "exit_code": r.exit_code}
+
+
 def run_tests(requirement_id: str) -> dict[str, Any]:
     """워크스페이스에서 pytest 를 실행한다."""
     try:
@@ -175,6 +185,7 @@ _TOOL_FUNCS: dict[str, Callable[..., dict[str, Any]]] = {
     "run_tests": run_tests,
     "run_security_scan": run_security_scan,
     "check_acceptance_tests": check_acceptance_tests,
+    "run_lint": run_lint,
 }
 
 #: 같은 이름의 도구를 역할에 따라 다른 구현으로 등록한다.

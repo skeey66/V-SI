@@ -35,7 +35,14 @@ ROLES: dict[str, Role] = {
         "planner", "requirements",
         ("write_file", "check_acceptance_tests"), False, "check_acceptance_tests",
     ),
-    "dev": Role("dev", "source_code", ("list_files", "read_file", "write_file"), False, None),
+    # 개발에게 `run_lint` 가 있는 것은 판정 권한이 아니다(verdict_tool 은 없다).
+    # 문법 오류와 오타 난 이름은 실행해 보기 전에 알 수 있고, 그걸 QA 왕복으로
+    # 발견하면 회차 하나가 통째로 날아간다. 검증자에게 주면 판정 근거가 둘로
+    # 갈리므로 주지 않는다.
+    "dev": Role(
+        "dev", "source_code",
+        ("list_files", "read_file", "write_file", "run_lint"), False, None,
+    ),
     "qa": Role("qa", "test_report", ("list_files", "read_file", "run_tests"), True, "run_tests"),
     "security": Role(
         "security", "security_report",
@@ -67,7 +74,10 @@ _PROMPTS = {
         "먼저 `list_files` 와 `read_file` 로 테스트를 읽어라. **테스트 파일에는 "
         "쓸 수 없다** — `write_file` 이 거부한다. 테스트는 네가 통과시켜야 할 "
         "목표이지 고쳐 쓸 대상이 아니다. 구현 파일만 쓴다.\n"
-        "표준 라이브러리만 쓴다. 외부 패키지를 import 하지 마라."
+        "표준 라이브러리만 쓴다. 외부 패키지를 import 하지 마라.\n\n"
+        "파일을 쓴 뒤 `run_lint` 로 한 번 훑어라. 오타 난 변수 이름이나 문법 "
+        "오류처럼 실행하면 바로 죽는 실수를 잡아 준다 — QA 에 넘기기 전에 "
+        "고치면 회차 하나를 아낀다. 지적이 없으면 그대로 두면 된다."
     ),
     "qa": (
         "너는 QA 에이전트다. `run_tests` 로 테스트를 실행한다.\n\n"
