@@ -84,3 +84,20 @@ def test_passing_verifiers_are_not_shown_as_complaints() -> None:
     prompt = task_prompt("계산기", 2, feedback)
     assert "테스트 2개 실패" in prompt
     assert "security" not in prompt
+
+
+def test_dev_has_lint_but_no_verdict_power() -> None:
+    """`run_lint` 는 개발이 자기 코드를 고치는 재료다 — 판정 도구가 아니다.
+
+    이 둘이 섞이면 "개발이 스스로 통과를 선언"하는 경로가 열린다.
+    """
+    dev = ROLES["dev"]
+    assert "run_lint" in dev.tools
+    assert dev.verdict_tool is None
+    assert not dev.is_verifier
+
+
+def test_dev_prompt_mentions_lint() -> None:
+    """도구가 있어도 프롬프트가 알려주지 않으면 모델이 부르지 않는다."""
+    prompt = system_prompt(ROLES["dev"])
+    assert "run_lint" in prompt

@@ -1,4 +1,4 @@
-"""MCP 가 노출하는 도구 6종.
+"""MCP 가 노출하는 도구 7종.
 
 모든 함수가 예외 대신 `ToolResult` 를 돌려준다. 도구 오류는 모델이 보고 고쳐야
 하는 정보이지 프로세스를 죽일 사건이 아니다 (스펙 §6.1).
@@ -288,3 +288,46 @@ def check_acceptance_tests(root: Path) -> ToolResult:
             f"{inner.detail}"
         ),
     )
+
+
+#: ruff 에 넘기는 규칙 선택. **버그만 고른다.**
+#:
+#: 기본값이나 넓은 선택(E, W, I, DTZ …)을 쓰면 import 정렬·따옴표 스타일 같은
+#: 취향 지적이 쏟아진다. 개발 에이전트는 그걸 고치느라 턴과 예산을 태우는데,
+#: 그 지적들은 요구사항이 통과하는 것과 아무 관계가 없다.
+#:
+#: 실측으로 고른 셋(같은 파일에 넓은 선택을 걸면 10건이 나오는데 그중 8건이
+#: 스타일이었다):
+#:   F821  정의되지 않은 이름 — 오타 난 변수·함수. 실행하면 NameError 다.
+#:   F401  쓰지 않는 import
+#:   F841  값을 넣어 놓고 쓰지 않는 지역 변수 — 대개 잊은 코드다
+#:   E9    문법 오류 — 파일이 아예 실행되지 않는다
+#:
+#: 멀쩡한 코드(add, reverse_string)에는 오탐이 없는 것도 확인했다.
+_LINT_SELECT = "F,E9"
+
+#: 검사에서 뺄 경로. `_SECURITY_SCAN_EXCLUDE` 와 같은 대상이지만 ruff 는
+#: `--exclude` 를 인자마다 하나씩 받으므로 리스트로 따로 둔다.
+_LINT_EXCLUDE = ("test_*.py", "tests")
+
+
+def run_lint(root: Path) -> ToolResult:
+    """문법 오류·오타 난 이름·죽은 코드를 찾는다.
+
+    **판정 도구가 아니다.** 개발 에이전트가 자기 코드를 고치는 재료일 뿐이고,
+    PASS/FAIL 은 여전히 QA 의 `run_tests` 와 보안의 `run_security_scan` 이
+    정한다. 그래서 개발에게 준다 — 검증자에게 주면 판정 근거가 둘로 갈린다.
+
+    인수 테스트는 검사에서 뺀다. 개발은 그 파일을 고칠 수 없으므로(`write_file`
+    이 거부한다) 거기서 나온 지적은 고칠 방법이 없는 잔소리가 된다.
+    """
+    argv = [
+        sys.executable, "-m", "ruff", "check",
+        "--no-cache",     # 워크스페이스에 .ruff_cache 를 남기지 않는다
+        "--isolated",     # 워크스페이스에 굴러다니는 설정 파일을 읽지 않는다
+        "--select", _LINT_SELECT,
+    ]
+    for pattern in _LINT_EXCLUDE:
+        argv += ["--exclude", pattern]
+    argv.append(".")
+    return _run(root, argv)

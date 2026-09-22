@@ -107,6 +107,8 @@ DEV_TOOLS = [
         "requirement_id": {"type": "string"}, "path": {"type": "string"},
         "content": {"type": "string"}},
         "required": ["requirement_id", "path", "content"]}),
+    _FakeTool("run_lint", "훑는다", {"type": "object", "properties": {
+        "requirement_id": {"type": "string"}}, "required": ["requirement_id"]}),
     # dev 에게 허용되지 않은 도구도 서버가 광고한다고 가정해도(권한은
     # tool_schemas/role.tools 가 거른다) 안전해야 한다.
     _FakeTool("run_tests", "돌린다", {"type": "object", "properties": {
@@ -336,16 +338,20 @@ async def test_mcp_session_uses_real_snake_case_attribute(monkeypatch) -> None:
     assert result_payload == {"kind": "source_code", "agent": "dev", "exit_code": 0}
 
     schema_names = {s["function"]["name"] for s in captured["schemas"]}
-    # dev 는 write_file/list_files/read_file 만 봐야 한다 — run_tests 는 서버가
-    # 광고해도 role.tools 로 걸러진다.
-    assert schema_names == {"list_files", "read_file", "write_file"}
+    # dev 가 보는 것은 role.tools 에 있는 것뿐이다 — run_tests 는 서버가
+    # 광고해도 걸러진다(스펙 §5.4: 개발에게 검증 권한을 주지 않는다).
+    # run_lint 는 판정 도구가 아니라 개발이 자기 코드를 훑는 도구라 있다.
+    assert schema_names == {"list_files", "read_file", "write_file", "run_lint"}
+    assert "run_tests" not in schema_names
     for schema in captured["schemas"]:
         assert "requirement_id" not in schema["function"]["parameters"]["properties"]
 
     bridge = captured["bridge"]
     assert bridge._session is fake_session
     assert bridge._requirement_id == "REQ-1"
-    assert bridge._allowed == frozenset({"list_files", "read_file", "write_file"})
+    assert bridge._allowed == frozenset(
+        {"list_files", "read_file", "write_file", "run_lint"}
+    )
 
     assert captured["role"].name == "dev"
 

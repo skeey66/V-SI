@@ -5,6 +5,7 @@ from pathlib import Path
 
 from tool_server.tools import (
     check_acceptance_tests,
+    run_lint,
     OUTPUT_TAIL_BYTES,
     READ_LIMIT_BYTES,
     list_files,
@@ -331,3 +332,74 @@ def test_empty_workspace_is_rejected(tmp_path: Path) -> None:
     result = check_acceptance_tests(tmp_path)
     assert result.exit_code == 1
     assert not result.ok
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# run_lint — 실행하기 전에 알 수 있는 실수를 잡는다.
+#
+# 규칙 선택을 좁게 잡은 것이 이 도구의 핵심이다. 넓게 켜면 import 정렬 같은
+# 취향 지적이 쏟아지고, 개발 에이전트는 그걸 고치느라 턴을 태운다 — 요구사항이
+# 통과하는 것과 아무 관계가 없는 일이다.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_lint_catches_misspelled_names(tmp_path: Path) -> None:
+    """오타 난 이름은 실행하면 NameError 다. 그걸 QA 왕복으로 발견하면 회차
+    하나가 통째로 날아간다."""
+    write_file(tmp_path, "calc.py", "def total(items):\n    return sum(itms)\n")
+    result = run_lint(tmp_path)
+    assert result.exit_code == 1
+    assert not result.ok
+    assert "itms" in result.detail
+
+
+def test_lint_catches_syntax_errors(tmp_path: Path) -> None:
+    write_file(tmp_path, "broken.py", "def f():\n    if x = 1:\n        return x\n")
+    result = run_lint(tmp_path)
+    assert result.exit_code == 1
+    assert not result.ok
+
+
+def test_lint_is_quiet_on_clean_code(tmp_path: Path) -> None:
+    """오탐이 나면 개발이 멀쩡한 코드를 고치기 시작한다.
+
+    실제로 에이전트가 만들어 낸 모양 그대로 넣는다 — 타입 표기가 없고 docstring
+    이 한국어인 함수다."""
+    write_file(
+        tmp_path,
+        "add.py",
+        'def add(a, b):\n    """두 수를 더한다."""\n    return a + b\n',
+    )
+    write_file(tmp_path, "rev.py", "def reverse_string(s):\n    return s[::-1]\n")
+    result = run_lint(tmp_path)
+    assert result.exit_code == 0
+    assert result.ok
+
+
+def test_lint_does_not_nag_about_style(tmp_path: Path) -> None:
+    """import 정렬·따옴표 같은 취향은 지적하지 않는다.
+
+    ruff 의 기본값이나 넓은 선택(E, W, I, DTZ)을 쓰면 이 파일에서 여러 건이
+    나온다. 그 지적들은 고쳐도 요구사항 통과에 아무 기여를 하지 않는다."""
+    write_file(
+        tmp_path,
+        "styled.py",
+        "import sys\nimport os\n\n\ndef f():\n    return os.path.join('a',\"b\") + sys.platform\n",
+    )
+    result = run_lint(tmp_path)
+    assert result.exit_code == 0, result.detail
+
+
+def test_lint_skips_acceptance_tests(tmp_path: Path) -> None:
+    """개발은 인수 테스트를 고칠 수 없다(write_file 이 거부한다). 그 파일의
+    지적은 고칠 방법이 없는 잔소리가 된다."""
+    write_file(tmp_path, "test_x.py", "import json\n\n\ndef test_a():\n    assert nope\n")
+    result = run_lint(tmp_path)
+    assert result.exit_code == 0, result.detail
+
+
+def test_lint_leaves_no_cache_in_the_workspace(tmp_path: Path) -> None:
+    """워크스페이스는 산출물 스냅샷의 대상이다 — 도구가 쓰레기를 남기면 안 된다."""
+    write_file(tmp_path, "a.py", "x = 1\n")
+    run_lint(tmp_path)
+    assert not (tmp_path / ".ruff_cache").exists()
