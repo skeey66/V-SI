@@ -82,12 +82,12 @@ async def test_completion_criterion_2_single_trace_in_jaeger() -> None:
     차지해 버린다 — `operation=POST /requirements`로 좁혀 워크플로 착수
     스팬만 골라내고, `start`(마이크로초)로 이 시험이 직접 촉발한 실행
     이후만 본다. 이게 끊기면(트레이스 전파가 어느 한 구간에서 새 루트로
-    다시 시작되면) service 집합이 5개 미만으로 잡힌다 — Task 14의
+    다시 시작되면) service 집합이 5개 미만으로 잡힌다 — OTel 계측의
     `instrument_app` 호출 순서나 컨텍스트 전파(traceparent 헤더)가 깨졌다는
     뜻이다.
 
     dev의 `POST /message:send`가 2회 나타나는 것도 함께 고정한다 — 이
-    시나리오는 dev가 2회차 호출에서 크래시하므로(Task 11), 같은 트레이스
+    시나리오는 dev가 2회차 호출에서 크래시하므로, 같은 트레이스
     안에 "크래시 후 재시도"가 두 번째 스팬으로 남아야 환류가 트레이스에서도
     보인다.
     """
@@ -247,7 +247,7 @@ async def test_completion_criterion_4_sigkill_then_restart_completes_without_int
     """오케스트레이터를 실행 도중 SIGKILL해도, 재기동만으로(사람 개입 없이)
     끝까지(환류 2회 포함) 완주해야 한다.
 
-    Task 13의 `test_reconcile.py`가 이미 여러 킬 지점(디스패치 직후·구현
+    `test_reconcile.py`가 이미 여러 킬 지점(디스패치 직후·구현
     중·검증 중·2회차 진입)을 파라미터화해 훨씬 깊게 검증한다 — 여기서는
     수용 기준 문구("SIGKILL 후 재기동해도 완주")를 그대로 재현하는 하나의
     시나리오만 고정해, 이 파일 하나만 읽어도 5개 기준이 전부 보이게 한다.
@@ -294,7 +294,7 @@ def test_criterion_5_infra_scan_covers_dependency_and_deploy_files() -> None:
     no_llm_calls` 본문이 같은 목록으로 한다(같은 스캔 규칙을 두 벌 두지
     않는다). `REPO_ROOT` 아래 알려진 자리만 명시적으로 나열하는 이유는
     SP1이 criterion-5에서 세운 관행과 같다 — 광범위한 재귀 스캔은
-    `.claude/worktrees/`(다른 브랜치의 스테일 체크아웃 사본)처럼 "이 브랜치가
+    숨김 디렉터리(다른 브랜치의 워크트리 사본 등)처럼 "이 브랜치가
     배포하는 것"과 무관한 자리까지 쓸어 담을 수 있다."""
     names = {p.name for p in _infra_files(REPO_ROOT)}
     assert "pyproject.toml" in names, names
@@ -311,8 +311,8 @@ def _infra_files(repo_root: pathlib.Path) -> list[pathlib.Path]:
 
     `REPO_ROOT` 바로 아래(그리고 `.github/workflows/`)에서 알려진 이름만
     명시적으로 나열한다 — SP1이 criterion-5에서 세운 관행과 같다: 광범위한
-    재귀 스캔(`rglob`)은 `.claude/worktrees/`(다른 브랜치의 스테일 체크아웃
-    사본)나 `.git/` 같은, "이 브랜치가 배포하는 것"과 무관한 자리까지 쓸어
+    재귀 스캔(`rglob`)은 숨김 디렉터리(다른 브랜치의 워크트리 사본 등)나
+    `.git/` 같은, "이 브랜치가 배포하는 것"과 무관한 자리까지 쓸어
     담아 오탐/과탐을 만들 수 있다. 이 시험 자신(`.py`)은 이 목록 어디에도
     안 걸린다 — 자기 참조 문제가 애초에 없다."""
     candidates = [
@@ -328,7 +328,7 @@ def _infra_files(repo_root: pathlib.Path) -> list[pathlib.Path]:
 async def test_completion_criterion_5_no_llm_calls() -> None:
     """스텁은 LLM을 호출하지 않는다. 외부 LLM 엔드포인트 의존이 없음을 고정한다.
 
-    브리프 원안은 `packages/`만 훑었다 — 그 뒤로 `services/`(이벤트 게이트웨이)
+    처음엔 `packages/`만 훑었다 — 그 뒤로 `services/`(이벤트 게이트웨이)
     와 `web/`(React 그래프)가 생겼으므로 스캔 범위를 넓힌다. `tests/`는 일부러
     뺀다 — 이 시험 자신이 금지어 목록을 문자열 리터럴로 들고 있어(바로 아래
     `forbidden` 튜플) 자기 자신과 매치되어 버린다; 스캔의 목적은 "배포되는

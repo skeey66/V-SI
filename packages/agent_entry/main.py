@@ -3,10 +3,10 @@
 기본값이 `stub` 인 것은 의도다 — SP1 의 144개 테스트가 그대로 돌아야 하고
 (스펙 §4.1/§12.1), 새 기본값이 조용히 LLM 을 부르는 일이 없어야 한다.
 
-**브리프(Task 12 계획) 대비 실제 인터페이스 차이:**
+**MCP 엔드포인트는 역할별로 다르다:**
 
-브리프는 MCP 엔드포인트가 하나(`http://workspace:8000/mcp`)라고 가정했지만,
-Task 3 이 실제로 만든 `services/tool_server/main.py`는 역할별로 별도
+초기 설계는 MCP 엔드포인트가 하나(`http://workspace:8000/mcp`)라고 가정했지만,
+실제 `services/tool_server/main.py`는 역할별로 별도
 `MCPServer`를 `/mcp/<role>/`(끝 슬래시 포함)에 각각 마운트한다 — 한 에이전트가
 다른 역할의 경로에 잘못 연결되면 `LlmExecutor.run_task`가 `McpRoleMismatch`로
 요란하게 죽는다(`packages/llm_agent/executor.py`). 그래서 여기서는 고정

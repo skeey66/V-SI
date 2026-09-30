@@ -31,7 +31,7 @@ OLD = 600.0  # 충분히 오래된 나이(초) — stale이지만 아직 stuck�
 # 다른 모든 테스트가 기본 나이로 OLD(600초)를 쓰므로, stuck 문턱은 그보다
 # 훨씬 커야 "그냥 오래 머문 행"과 "stuck 안전망 대상"이 섞이지 않는다.
 STUCK_AFTER_S = OLD * 2  # 1200초
-# Task 11: run_s backstop. 이 파일의 모든 요구사항은 OLD(600초)나 STUCK_AFTER_S
+# run_s backstop. 이 파일의 모든 요구사항은 OLD(600초)나 STUCK_AFTER_S
 # (1200초) 안쪽에서 나이를 먹으므로, run_s를 그보다 훨씬 크게 잡아 이 파일의
 # 기존 시나리오들이 run_s backstop과 우연히 겹치지 않게 한다(run_s 자체의
 # 동작은 tests/orchestrator/test_run_budget.py가 전담해서 고정한다).
@@ -213,7 +213,7 @@ def test_single_crash_is_still_within_budget() -> None:
     """실패가 한 번뿐이면(EXECUTION 상한 2) 아직 예산이 남아 있다 — 계속 재시도한다.
 
     `test_failed_row_is_superseded_by_a_new_dispatch`와 같은 사실을 캡의
-    관점에서 다시 고정한다: 캡이 생겼다고 정당한 재시도(Task 13의 기존 동작)가
+    관점에서 다시 고정한다: 캡이 생겼다고 정당한 재시도(리컨실러의 기존 동작)가
     막히면 안 된다.
     """
     req = _req(RequirementState.IMPLEMENTING)
@@ -228,7 +228,7 @@ def test_repeated_execution_crashes_exhaust_budget_and_give_up() -> None:
     """EXECUTION 상한은 2 — 두 번째 크래시에서 예산이 바닥나 포기한다.
 
     영원히 크래시하는 에이전트를 리컨실러가 끝없이 재디스패치하지 않는다는
-    계약이다(Task 12). Task 행은 그대로 두고(불변) 더 이상 새 행을 만들지 않는다.
+    계약이다. Task 행은 그대로 두고(불변) 더 이상 새 행을 만들지 않는다.
     """
     req = _req(RequirementState.IMPLEMENTING)
     second = _task("dev", "failed", failure_class="execution", attempt=2)

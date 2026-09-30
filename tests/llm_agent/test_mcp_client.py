@@ -92,14 +92,14 @@ async def test_tool_outside_allowlist_is_refused() -> None:
 
 async def test_tool_not_allowed_message_names_the_tool() -> None:
     """오류 메시지가 어떤 도구가 거부됐는지 알려줘야 한다 (말단 도구는
-    루프 과제가 이 메시지를 모델에게 되돌려준다)."""
+    대화 루프가 이 메시지를 모델에게 되돌려준다)."""
     bridge = ToolBridge(_FakeSession(), "REQ-7", ["read_file"])
     with pytest.raises(ToolNotAllowed, match="run_tests"):
         await bridge.call("run_tests", {})
 
 
 async def test_malformed_tool_call_sentinel_is_rejected_like_any_other_unknown_tool() -> None:
-    """Task 4 의 __malformed_tool_call__ 센티널은 특별 취급하지 않는다 —
+    """Ollama 클라이언트의 __malformed_tool_call__ 센티널은 특별 취급하지 않는다 —
     어떤 역할의 허용 목록에도 없으므로 그냥 거부된다."""
     bridge = ToolBridge(_FakeSession(), "REQ-7", ["write_file"])
     with pytest.raises(ToolNotAllowed, match="__malformed_tool_call__"):

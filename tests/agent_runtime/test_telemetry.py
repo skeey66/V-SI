@@ -11,8 +11,8 @@ from agent_runtime.telemetry import instrument_app, instrumented_client
 async def test_trace_context_crosses_http_boundary():
     """서버(FastAPI)·클라이언트(httpx) 계측이 trace_id를 유지한 채 경계를 넘는지 검증한다.
 
-    컨트롤러 재정 A: 브리프의 `client._transport = transport` 직접 대입은
-    private httpx 속성이라 버전에 취약하다. 대신 `httpx.AsyncClient(transport=...)`로
+    `client._transport = transport` 직접 대입은 쓰지 않는다 — private httpx
+    속성이라 버전에 취약하다. 대신 `httpx.AsyncClient(transport=...)`로
     생성 시점에 전송을 주입하고, `HTTPXClientInstrumentor().instrument()`는
     (client 생성 전인) `instrumented_client` 내부에서 먼저 호출되게 한다.
     """

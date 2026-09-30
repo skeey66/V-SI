@@ -1,14 +1,12 @@
-"""`run_s`를 요구사항 나이 backstop으로 배선한다 (Task 11, 스펙 §9.2).
+"""`run_s`를 요구사항 나이 backstop으로 배선한다 (스펙 §9.2).
 
-브리프의 예시 테스트는 `Action.GIVE_UP`(클래스 속성)을 가정했지만 실제
-`Action`은 `kind` 문자열을 담는 데이터클래스다(`orchestrator.reconciler`의
-`GIVE_UP` 모듈 상수가 그 kind 값이다) — 아래는 실제 시그니처·타입에 맞춘
-버전이다. 더미 요구사항 객체에도 `updated_at`을 채운다 — `next_action`이
+`Action.GIVE_UP` 같은 클래스 속성은 없다 — 실제 `Action`은 `kind` 문자열을
+담는 데이터클래스다(`orchestrator.reconciler`의 `GIVE_UP` 모듈 상수가 그 kind
+값이다). 아래는 실제 시그니처·타입에 맞췄다. 더미 요구사항 객체에도 `updated_at`을 채운다 — `next_action`이
 `last_activity`에서 그 필드를 읽기 때문이다.
 
-리뷰 라운드 1: 처음 구현은 이 검사를 함수 맨 앞(다른 어떤 판단보다 먼저)에
-두었다 — 브리프가 그렇게 시켰다. 하지만 그러면 마지막 검증자가 이미 PASS를
-써서 FINISH를 돌려줘야 할 요구사항도, 나이가 run_s를 넘기기만 하면 GIVE_UP을
+이 검사를 함수 맨 앞(다른 어떤 판단보다 먼저)에 두면 마지막 검증자가 이미
+PASS를 써서 FINISH를 돌려줘야 할 요구사항도, 나이가 run_s를 넘기기만 하면 GIVE_UP을
 받는다. **예산은 새 일을 막을 뿐, 이미 끝난 일을 버리지 않는다** — 그래서
 아래 `test_finished_verification_survives_run_budget` 등으로 "이미 끝난
 일(FINISH/ADVANCE)과 SDK 결함 안전망(FORCE_FAIL)은 건드리지 않고, 새 일을
@@ -84,7 +82,7 @@ def test_run_budget_preempts_dispatch() -> None:
 
 
 def test_run_budget_preempts_probe() -> None:
-    """리뷰 라운드 1 — 열린 행이 아직 stuck은 아니어도(PROBE 대상) 예산을
+    """열린 행이 아직 stuck은 아니어도(PROBE 대상) 예산을
     넘겼으면 더 묻지 않는다. PROBE는 "더 기다린다"는 뜻이라 새 일에 준한다."""
     now = datetime.now(timezone.utc)
     row = _task("dev", "working", age_s=10.0)  # STUCK_AFTER_S 안쪽 — PROBE 대상이지 FORCE_FAIL 대상이 아니다.
@@ -98,7 +96,7 @@ def test_run_budget_preempts_probe() -> None:
 def test_run_budget_preempts_remediate() -> None:
     """REMEDIATING도 새 revision·새 dev Task를 만드는 결정이라 예산 대상이다.
 
-    (실행부 회귀 — Task 11 리뷰 라운드 1) 이 시나리오는 열린 행도 완료 행도
+    (실행부 회귀) 이 시나리오는 열린 행도 완료 행도
     전혀 없다(예: `remediate` 두 트랜잭션 사이에서 죽어 이번 회차 Task가 0개인
     채로 시간을 다 쓴 경우). `next_action`은 여전히 GIVE_UP(빈 tasks)을
     돌려주는 게 맞다 — 그 GIVE_UP을 실제로 집행하는지(비어 있는 `tasks`로도
@@ -114,7 +112,7 @@ def test_run_budget_preempts_remediate() -> None:
 
 
 def test_finished_verification_survives_run_budget() -> None:
-    """FINISH는 이미 끝난 일이다 — 예산 초과라도 버리지 않는다 (리뷰 라운드 1)."""
+    """FINISH는 이미 끝난 일이다 — 예산 초과라도 버리지 않는다."""
     # age_s를 stale_after_s(5초)보다 훨씬 크게 잡는다 — 그래야 "방금 끝났다"는
     # freshness 가드에 걸려 next_action이 조기에 None을 돌려주는 일 없이
     # FINISH 분기까지 실제로 도달한다.

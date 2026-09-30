@@ -1,7 +1,6 @@
 """`LlmExecutor` — A2A 경계.
 
-브리프(`task-9-brief.md`)의 스케치는 실제 인터페이스와 여러 군데 어긋난다
-(전부 실측 확인):
+초기 설계와 실제 인터페이스가 어긋나는 지점들(전부 실측 확인):
 
 1. MCP `Tool` 객체는 `inputSchema` 가 아니라 `input_schema`(스네이크케이스)를
    노출한다(`mcp_client.py` 참고).
@@ -12,19 +11,18 @@
    생성자가 그대로 받아쓴다(엮는 것은 이 파일을 쓰는 쪽의 책임).
 4. 설치된 mcp SDK 의 `mcp.client.streamable_http` 공개 함수 이름은
    `streamablehttp_client` 가 아니라 `streamable_http_client` 이고, 그
-   컨텍스트매니저는 `(read_stream, write_stream)` 2-튜플만 낸다(브리프가
-   가정한 3-튜플이 아니다) — 소스(`streamable_http.py`)를 직접 읽어 확인.
+   컨텍스트매니저는 `(read_stream, write_stream)` 2-튜플만 낸다(구버전의
+   3-튜플이 아니다) — 소스(`streamable_http.py`)를 직접 읽어 확인.
 
 `run_task` 는 실제로 MCP 세션을 열려고 시도한다(`session.initialize()` 까지
 포함) — 그래서 MCP 를 신경 쓰지 않는 테스트도 네트워크를 실제로 타지 않도록
 `_fake_mcp` 오토유즈 픽스처로 기본 가짜 왕복을 심어 둔다. MCP 자체를
 검사하는 테스트는 자신의 monkeypatch 로 이 기본값을 덮어쓴다.
 
-**리뷰 라운드 1 추가분**: 1차 제출은 `run_task` 와 `payload_to_part` 만
-시험하고 `execute()`/`cancel()`/`_incoming_payload` 는 전혀 건드리지 않았다
-(`_Queue`/`_Ctx` 가 죽은 코드로 남아 있던 것이 그 증거였다). 이번 라운드는
-A2A 경계 자체 — 이벤트 순서, 취소 종단 상태, 페이로드 추출 — 를 시험하고,
-MCP 역할 불일치 조기 실패와 자문 이벤트 실패 흡수도 추가한다.
+`run_task` 와 `payload_to_part` 만이 아니라 `execute()`/`cancel()`/
+`_incoming_payload` 까지, 즉 A2A 경계 자체 — 이벤트 순서, 취소 종단 상태,
+페이로드 추출 — 를 시험하고, MCP 역할 불일치 조기 실패와 자문 이벤트 실패
+흡수도 시험한다.
 """
 from __future__ import annotations
 
@@ -66,7 +64,7 @@ def _new_executor(*, agent: str = "dev", session_maker=None) -> LlmExecutor:
 class _FakeTool:
     """실제 mcp SDK `Tool` 을 흉내 낸다 — `input_schema`(스네이크케이스)만
     노출한다. `inputSchema` 속성은 아예 없다: 구현이 `t.inputSchema` 를 읽으면
-    (브리프의 코드가 그렇다) 여기서 `AttributeError` 로 터져야 한다."""
+    (초기 설계의 코드가 그랬다) 여기서 `AttributeError` 로 터져야 한다."""
 
     def __init__(self, name: str, description: str, input_schema: dict) -> None:
         self.name = name
@@ -281,7 +279,7 @@ async def test_on_tool_is_a_safe_noop_without_a_session_maker(monkeypatch) -> No
 
 async def test_on_tool_failure_is_logged_and_swallowed_not_fatal(monkeypatch, caplog) -> None:
     """자문 이벤트는 워크플로 권위가 없다(스펙 §8.1) — DB 순단 하나가 에이전트
-    실행 전체를 끝내면 안 된다. Task 8 의 인라인 `await` 판단은 유지하면서
+    실행 전체를 끝내면 안 된다. 인라인 `await` 방식은 유지하면서
     실패만 흡수하는지 확인한다."""
     async def boom(*args, **kwargs):
         raise RuntimeError("db 순단")
@@ -555,8 +553,8 @@ async def test_loop_failed_escapes_execute_after_task_and_working_are_enqueued(m
 # ---------------------------------------------------------------------------
 
 async def test_cancel_produces_canceled_not_failed() -> None:
-    """브리프는 `updater.failed()` 를 스케치했지만 SP1 `StubExecutor.cancel`
-    은 `updater.cancel()` 을 쓴다 — 취소 요청과 실행 실패는 다른 종단
+    """`updater.failed()` 가 아니라 `updater.cancel()` 이다 — SP1
+    `StubExecutor.cancel` 도 같다 — 취소 요청과 실행 실패는 다른 종단
     상태다."""
     ex = _new_executor()
     ctx = _Ctx(current_task=None)

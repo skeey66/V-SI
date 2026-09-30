@@ -128,7 +128,7 @@ describe("손을 드는 사람", () => {
   });
 
   it("escalated 는 payload 의 agent 를 먼저 믿는다", () => {
-    // give_up(재시도 예산 소진)은 agent 를 실어 보낸다(Task 12).
+    // give_up(재시도 예산 소진)은 agent 를 실어 보낸다.
     const s = feed([
       ev("task_submitted", { agent: "qa" }),
       ev("task_completed", { agent: "qa", verdict: "FAIL" }),

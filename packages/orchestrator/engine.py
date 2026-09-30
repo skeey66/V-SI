@@ -6,16 +6,15 @@
 1. 에이전트끼리 직접 부르지 않는다. 모든 디스패치는 이 클래스를 통한다.
 2. 상태 전이와 아웃박스 이벤트는 **한 트랜잭션**에 들어간다.
 3. `workflow_tasks` 행은 불변이다 — 완료된 행을 되돌리지 않는다. 재시도·환류는
-   새 행을 만든다(Task 11·12).
+   새 행을 만든다.
 4. `verdict`는 에이전트의 주장이 아니라 `exit_code`에서 도출한다.
 
-Task 10이 해피 패스를, Task 11이 환류 루프와 반복 상한을 채웠다. Task 12는
-`submit()` 왕복이 그 자리에서 터지는 경우(전송/실행/독성입력)에 재시도·백오프를
-붙였다. 제출은 됐는데 그 뒤 executor가 크래시해 푸시가 안 오는 경우는 여전히
-리컨실러(Task 13)의 몫이다 — 두 실패는 "아직 Task가 생기지 않았다" vs "Task는
+해피 패스 위에 환류 루프와 반복 상한이 얹혀 있고, `submit()` 왕복이 그 자리에서
+터지는 경우(전송/실행/독성입력)에는 재시도·백오프가 붙는다. 제출은 됐는데 그 뒤
+executor가 크래시해 푸시가 안 오는 경우는 리컨실러의 몫이다 — 두 실패는 "아직 Task가 생기지 않았다" vs "Task는
 생겼는데 죽었다"로 층이 다르다.
 
-**재개 가능한 공개 진입점**(Task 13): `dispatch_agent` / `advance` /
+**재개 가능한 공개 진입점**: `dispatch_agent` / `advance` /
 `maybe_finish` / `remediate` / `refresh_task` / `on_task_failed`는 리컨실러가
 바깥에서 부른다. 크래시는 이 엔진을 호출 사슬 중간에서 끊어 놓으므로, 각 단계가
 **끊긴 지점부터 다시 불릴 수 있어야** 한다. 리컨실러가 상태 기계를 흉내 내지
@@ -89,10 +88,10 @@ TASK_SUBMITTED = "submitted"
 TASK_WORKING = "working"
 TASK_COMPLETED = "completed"
 #: 에이전트 Task가 산출물 없이 죽었다. `verdict == "FAIL"`(정상 완료, 산출물 있음)과는
-#: 다른 것이다 — 이 행은 되살릴 수 없고 새 행으로 대체된다(Task 13).
+#: 다른 것이다 — 이 행은 되살릴 수 없고 새 행으로 대체된다.
 TASK_FAILED = "failed"
 
-#: 아직 결과가 확정되지 않은 Task 행. 리컨실러(Task 13)가 이 상태의 행만 캔다.
+#: 아직 결과가 확정되지 않은 Task 행. 리컨실러가 이 상태의 행만 캔다.
 OPEN_TASK_STATES = (TASK_SUBMITTED, TASK_WORKING)
 TERMINAL_ROW_STATES = (TASK_COMPLETED, TASK_FAILED)
 
@@ -100,13 +99,13 @@ TERMINAL_ROW_STATES = (TASK_COMPLETED, TASK_FAILED)
 def _content_hash(payload: dict) -> str:
     """아티팩트 내용의 결정적 해시. `artifacts.sha256`에만 쓰인다.
 
-    브리프 스케치는 `str(hash(str(payload)))`를 썼지만 파이썬의 내장 `hash`는
+    `str(hash(str(payload)))`는 쓸 수 없다 — 파이썬의 내장 `hash`는
     프로세스마다 시드가 달라(PYTHONHASHSEED) 같은 내용이 다른 값을 낳는다.
     아티팩트 무결성 지문은 재기동을 넘어 같은 값이어야 하므로 sha256을 쓴다.
 
-    (이 docstring은 한때 "Task 11이 이 해시를 멱등성 키의 입력으로 쓴다"고
-    적고 있었다. 사실이 아니다 — 멱등성 키의 유일한 호출부는 입력 해시로 빈
-    시퀀스를 넘긴다. 결정성이 필요한 근거는 멱등성 키가 아니라 지문 자체다.)
+    (이 해시는 멱등성 키의 입력이 아니다 — 멱등성 키의 유일한 호출부는 입력
+    해시로 빈 시퀀스를 넘긴다. 결정성이 필요한 근거는 멱등성 키가 아니라 지문
+    자체다.)
     """
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"),
                            ensure_ascii=False)
@@ -136,7 +135,7 @@ class WorkflowEngine:
         self._sm = session_maker
         self._clients = clients
         self._timeouts = timeouts
-        # 운영 신호 3(Task 14): `_transition`이 "전이를 건너뛴다"로 되돌아간
+        # 운영 신호 3: `_transition`이 "전이를 건너뛴다"로 되돌아간
         # 횟수를 요구사항별로 센다. 한 번의 스킵은 정상적인 자기 치유(경합 후
         # 재관찰)지만, **반복되는** 스킵은 수렴이 아니라 정체다 — 이 카운터가
         # 그 둘을 Jaeger span 이벤트만으로 구분하게 해 준다(로그를 안 봐도 된다).
@@ -180,19 +179,19 @@ class WorkflowEngine:
     async def dispatch_agent(self, requirement_id: str, agent: str) -> None:
         """에이전트 1기에 작업을 제출한다.
 
-        공개 메서드다 — Task 13의 리컨실리에이터가 바깥에서 호출한다.
+        공개 메서드다 — 리컨실러가 바깥에서 호출한다.
 
         `attempt`는 같은 (요구사항, 에이전트, 회차)에 이미 있는 행 수 + 1이다.
         크래시로 죽은 행을 대체하는 디스패치가 몇 번째인지를 사실로 기록할 뿐,
         **이 번호 자체에는 상한이 없다** — 반복 재디스패치를 몇 번까지 허용할지는
-        리컨실러의 `next_action`이 결정한다(Task 12, 캡은 관측된 실패 행 수와
+        리컨실러의 `next_action`이 결정한다(캡은 관측된 실패 행 수와
         `failure_class`로 계산한다). 멱등성 키에도 이 번호가 들어간다(유니크
         제약이 있는데 Task 행은 불변이라 새 행을 만들어야 하므로, 회차만으로는
         키가 충돌한다).
 
         `submit()` 자체가 그 자리에서 터지면(연결 거부·5xx·스키마 오류 등)
         아직 에이전트 쪽에 Task가 생기지 않았으므로 **같은 행, 같은 멱등성
-        키로 그 자리에서 재시도한다**(Task 12) — 새 행을 만드는 것은 이미
+        키로 그 자리에서 재시도한다** — 새 행을 만드는 것은 이미
         디스패치된 뒤 죽은 경우(리컨실러 소관)에만 해당한다. 재시도 예산을
         다 쓰면 이 행을 실패로 확정하고 분류를 남긴다. `refresh_task`는 그
         경우 부르지 않는다 — 물어볼 `a2a_task_id`가 없다.
@@ -297,7 +296,7 @@ class WorkflowEngine:
                 break
             except Exception as exc:
                 last_failure = classify(exc)
-                # 리뷰 라운드 1 수정: 제자리 재시도(같은 행·같은 멱등성 키)는
+                # 제자리 재시도(같은 행·같은 멱등성 키)는
                 # 요청이 상대에게 **닿지 않았다는 것이 증명될 때만** 안전하다.
                 # 그 외(읽기 타임아웃·5xx·wait_for 타임아웃 등)는 에이전트가
                 # 이미 작업을 받았을 수 있어, 그 자리에서 다시 보내면 같은
@@ -348,7 +347,7 @@ class WorkflowEngine:
 
         if a2a_id is None:
             # 재시도 예산을 다 썼다. 이 행은 종결됐다 — 다시 보낼지는 리컨실러의
-            # `next_action`이 관측된 실패 행 수로 결정한다(Task 12의 캡).
+            # `next_action`이 관측된 실패 행 수로 결정한다(재시도 캡).
             return
 
         # 경합 구간 닫기: 에이전트가 a2a_task_id를 우리가 적기도 전에 끝내고 푸시를
@@ -365,8 +364,8 @@ class WorkflowEngine:
         """SDK `BasePushNotificationSender`가 보낸 콜백 본문을 해석한다.
 
         본문은 `MessageToDict(to_stream_response(event))`라 camelCase JSON이며
-        `task` / `statusUpdate` / `artifactUpdate` 중 하나가 들어 있다(브리프
-        스케치의 `{"task_id": ..., "payload": ...}`가 아니다 — 실제 SDK 형식에
+        `task` / `statusUpdate` / `artifactUpdate` 중 하나가 들어 있다(단순한
+        `{"task_id": ..., "payload": ...}` 형태가 아니다 — 실제 SDK 형식에
         맞춘다). 종료 상태 전이만 의미가 있고 나머지는 흘려보낸다.
         """
         update = body.get("statusUpdate")
@@ -403,7 +402,7 @@ class WorkflowEngine:
         """에이전트에 권위 있게 물어 우리 행을 현재 사실에 맞춘다.
 
         완료 감지 경로가 하나로 모인다: 디스패치 직후 안전망도, 푸시 콜백도,
-        리컨실러(Task 13)도 전부 이 메서드를 통한다 — "어떻게 알게 됐는가"에
+        리컨실러도 전부 이 메서드를 통한다 — "어떻게 알게 됐는가"에
         따라 판정이 갈라지면 안 되기 때문이다. 결과 상태를 문자열로 돌려준다.
 
         **종료했는데 산출물이 하나도 없으면 executor 크래시로 본다.** verdict
@@ -481,7 +480,7 @@ class WorkflowEngine:
         """Task 행을 실패로 확정한다. **관측된 사실**과 그 분류를 함께 남긴다.
 
         여기서 재시도하지 않는다 — 누락된 작업을 다시 디스패치할지, 몇 번까지
-        허용할지는 수렴 루프(리컨실러)의 `next_action`이 결정한다(Task 12).
+        허용할지는 수렴 루프(리컨실러)의 `next_action`이 결정한다.
         이 메서드가 하는 일은 "이 행은 더 이상 기다릴 대상이 아니다"와 "왜
         끝났는가"를 영속화하는 것뿐이다 — `failure_class`가 리컨실러의 캡
         계산 입력이 된다.
@@ -696,7 +695,7 @@ class WorkflowEngine:
         잠금 안으로 들여왔다. `expected`가 없으면 종전대로 허용되지 않는 신호에
         `IllegalTransition`을 던진다(호출자가 전제를 이미 보장하는 경로들이다).
 
-        `extra`(리뷰 라운드 1 추가): 이벤트 페이로드에 `{"to", "signal"}` 외에
+        `extra`: 이벤트 페이로드에 `{"to", "signal"}` 외에
         더 남기고 싶은 필드. `LIMIT_EXCEEDED`는 도달 경로가 둘이다(`remediate`의
         회차 상한, `give_up`의 재시도 예산 소진) — 둘 다 같은 신호·같은 목적지라
         페이로드에 원인을 적지 않으면 운영자가 구분할 수 없다. 상태 전이와
@@ -753,7 +752,7 @@ class WorkflowEngine:
         두 번째가 `IllegalTransition`으로 터진다. 요구사항 행을 `FOR UPDATE`로
         잠가 판정을 직렬화하고, 이미 VERIFYING을 벗어났으면 되돌아간다.
 
-        **두 verdict가 모두 모였을 때만 판정한다는 전제를 Task 11도 지킨다.**
+        **두 verdict가 모두 모였을 때만 판정한다는 전제를 환류 루프도 지킨다.**
         FAIL 하나만 보고 먼저 환류를 시작하면, 아직 디스패치되지 않았거나 실행
         중인 다른 검증 에이전트가 있는 채로 revision이 올라가 `advance`의 검증
         루프가 회차를 넘나들며 Task를 중복 생성한다. 그래서 환류 분기는 verdict
@@ -814,7 +813,7 @@ class WorkflowEngine:
         되돌리는 대신 앞으로 간다: 기존 Task 행은 그대로 두고 revision을 올려
         dev부터 새 행을 만든다(`dispatch_agent`가 `revision_of`로 계보를 잇는다).
 
-        **다시 불러도 안전하다**(Task 13). 이 메서드는 두 트랜잭션이라(회차 증가 /
+        **다시 불러도 안전하다**. 이 메서드는 두 트랜잭션이라(회차 증가 /
         상태 전이) 사이에서 프로세스가 죽으면 `remediating` + 올라간 revision +
         그 revision의 Task 0개가 남는다. 리컨실러가 그 상태를 보고 이 메서드를
         다시 부르므로, 회차를 **두 번** 올리지 않도록 "이번 회차가 이미 소비됐는가"
@@ -885,7 +884,7 @@ class WorkflowEngine:
 
         공개 메서드다 — 리컨실러의 `next_action`이 관측(실패 행 수와
         `failure_class`)에서 이미 "이 에이전트는 더 재시도해도 소용없다"를
-        판단했다(Task 12의 캡). 여기서는 그 판단을 실행해 상태를 ESCALATED로
+        판단했다(재시도 캡). 여기서는 그 판단을 실행해 상태를 ESCALATED로
         확정할 뿐, 판단 자체를 다시 하지 않는다 — 판단 로직이 두 곳에 있으면
         갈라진다는 형제 메서드들의 규율을 그대로 따른다.
 
@@ -896,10 +895,10 @@ class WorkflowEngine:
         사이에 다른 경로가 먼저 전이시켰으면(`_transition`이 False) 조용히
         돌아간다.
 
-        `agent`·`failure_class`(리뷰 라운드 1 추가): 이전엔 이 정보가 호출자
-        (`Action.agents`)까지만 있고 아웃박스 이벤트엔 닿지 않아, 운영자가
-        "재시도 예산 소진"(`give_up`)과 "회차 상한 초과"(`remediate`)를
-        구분할 수도, 어느 에이전트가 원인인지 알 수도 없었다. `_transition`의
+        `agent`·`failure_class`: 이 정보가 호출자(`Action.agents`)까지만 있고
+        아웃박스 이벤트엔 닿지 않으면, 운영자가 "재시도 예산 소진"(`give_up`)과
+        "회차 상한 초과"(`remediate`)를 구분할 수도, 어느 에이전트가 원인인지
+        알 수도 없다. `_transition`의
         `extra`로 같은 트랜잭션·같은 이벤트에 실어 보낸다.
         """
         async with self._sm() as s:
@@ -933,7 +932,7 @@ class WorkflowEngine:
     async def give_up_on_budget(self, requirement_id: str) -> None:
         """요구사항 전체 시간 예산(`run_s`)을 넘긴 요구사항을 강제로 포기시킨다.
 
-        (Task 11 리뷰 라운드 1) `give_up`과 근거가 다르다 — `give_up`은 "이
+        `give_up`과 근거가 다르다 — `give_up`은 "이
         에이전트의 재시도 예산이 바닥났다"는, 특정 실패 행에서 나오는 관측을
         실행한다. `run_s` backstop은 특정 행이 아니라 요구사항이 태어난 뒤로
         흐른 시간 자체가 근거이므로, 원인이 된 실패 행이 아예 없을 수 있다 —

@@ -60,7 +60,7 @@ def instrumented_client(
 ) -> httpx.AsyncClient:
     """클라이언트 측 컨텍스트 주입. `ClientConfig.httpx_client`/에이전트 push client로 쓴다.
 
-    `transport`는 테스트 전용 확장이다(컨트롤러 재정 A) — 운영 코드는 기본값
+    `transport`는 테스트 전용 확장이다 — 운영 코드는 기본값
     `None`을 써서 지금까지와 동일하게 실제 네트워크로 나간다. 테스트는
     `httpx.ASGITransport(app=app)`를 넘겨 프로세스 경계 없이 계측만 검증한다.
     `HTTPXClientInstrumentor().instrument()`는 클라이언트 생성 **전에** 호출해야

@@ -3,7 +3,7 @@
 `tests/integration/test_gateway.py`의 재기동 시험은 "게이트웨이가 죽어 있는
 동안 기록된 이벤트가 살아남는가"를 증명한다. 이 파일은 그보다 좁고 날카로운
 창을 겨눈다: **게이트웨이가 살아서 행을 읽었지만, 아직 아무에게도 전달하지
-못한 순간**. 리뷰 라운드 1 전 구현은 읽자마자 `published_at`을 찍고
+못한 순간**. 예전 구현은 읽자마자 `published_at`을 찍고
 커밋한 뒤에야 소켓으로 보냈다 — 그 커밋과 전송 사이에 전송이 전부 실패하면
 행은 영원히 "발행됨"으로 남은 채 아무에게도 전달되지 못한다. 이 파일은
 `services/event_gateway/pump.py`의 순수 로직(`pump_once`)을 직접 불러
@@ -13,7 +13,7 @@
 중요하다 — `main`은 import 시점에 `VSI_DATABASE_URL`을 요구하고 OTel 전역
 TracerProvider를 고정하는데(`setup_tracing`), 그 부작용이 같은 pytest
 프로세스에서 나중에 도는 `tests/agent_runtime/test_telemetry.py`를 조용히
-깨뜨린다(리뷰 라운드 1에서 실측). `pump.py`는 그런 부작용이 없다.
+깨뜨린다(실측). `pump.py`는 그런 부작용이 없다.
 
 컨테이너를 거치지 않는 순수 단위 시험이라 `tests/orchestrator/*`와 같은
 패턴(로컬 스키마를 매 시험마다 drop_all/create_all)을 쓴다 — 살아 있는
@@ -133,9 +133,9 @@ async def test_no_clients_skips_cycle_without_touching_db(maker) -> None:
     assert rows[0].published_at is None
 
 
-# --------------------------------------------------------- 커서 유효성 (Task 17)
+# --------------------------------------------------------- 커서 유효성
 #
-# 실측(Task 17 작업 중): 이 컴포즈 스택을 여러 시간 띄워 둔 채로 단위 테스트
+# 실측: 이 컴포즈 스택을 여러 시간 띄워 둔 채로 단위 테스트
 # 스위트(`tests/orchestrator` 등, `events` 테이블을 매 테스트마다
 # drop_all/create_all한다)를 반복 실행했더니, 살아 있던 게이트웨이 컨테이너의
 # 메모리 속 `last_id`가 168로 남았는데 리셋된 테이블의 `max(event_id)`는

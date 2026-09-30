@@ -22,7 +22,7 @@ def idempotency_key(requirement_id: str, agent: str, revision: int,
     키가 에이전트에 두 번 도달하는 경로가 없다. 그 전제가 깨지면(제자리 재시도
     범위 확대) 에이전트측 멱등성이 **필수**가 된다 — 스펙 §12.1의 SP2 경고.
 
-    `attempt`는 **크래시 복구(Task 13)** 때문에 들어왔다. 첫 시도(attempt=1)의
+    `attempt`는 **크래시 복구** 때문에 들어왔다. 첫 시도(attempt=1)의
     키는 이 인자가 생기기 전과 **같은 값**이다 — 재료에 아예 넣지 않는다.
 
     `input_hashes`는 확장 지점이고 **현재 운영 경로는 쓰지 않는다**: 유일한

@@ -87,7 +87,7 @@ async def test_qa_fails_twice_reaches_accepted() -> None:
     """dev가 2회차 호출에서 크래시하는 시나리오가 끝까지 간다.
 
     이것이 리컨실러가 동작한다는 가장 강한 증거다. SDK는 executor 오류 경로에서
-    푸시를 보내지 않으므로(Task 11 실측) 크래시한 Task는 오케스트레이터에게
+    푸시를 보내지 않으므로(실측) 크래시한 Task는 오케스트레이터에게
     **아무 신호도 남기지 않는다**. 오래 머문 행을 폴링해 권위 있게 읽는 루프가
     없으면 이 시나리오는 revision 2의 dev에서 영원히 멈춘다.
     """
@@ -124,7 +124,7 @@ async def test_remediating_with_bumped_revision_and_no_tasks_is_resumed() -> Non
     """`remediate`의 두 트랜잭션 사이에서 죽은 상태를 리컨실러가 이어받는다.
 
     revision은 2로 올라갔는데 revision 2의 Task가 0개이고 상태는 remediating이다.
-    이 조합은 Task 11 구현자가 DB에서 실제로 관측한 것이고, 여기서 계약으로 고정한다.
+    이 조합은 개발 중 DB에서 실제로 관측한 것이고, 여기서 계약으로 고정한다.
     """
     rid = "REQ-031"
     await reset_agents(ALL_PASS)

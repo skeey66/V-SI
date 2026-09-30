@@ -8,10 +8,10 @@
 그 둘만으로 다음에 할 일 하나를 고르는 것이 `next_action`이며, 순수 함수라
 DB도 컨테이너도 없이 시험할 수 있다(`tests/orchestrator/test_reconciler_plan.py`).
 
-복구하는 상태 네 가지(앞의 셋은 앞선 구현자들이 DB에서 실제로 관측한 것이다):
+복구하는 상태 네 가지(앞의 셋은 개발 중 DB에서 실제로 관측한 것이다):
 
 1. **푸시가 영영 오지 않는 `working` 행.** 에이전트의 executor가 크래시하면
-   SDK는 푸시를 보내지 않는다(Task 11 실측: 정상 4회 → 크래시 2회). 디스패치
+   SDK는 푸시를 보내지 않는다(환류 루프 실측: 정상 4회 → 크래시 2회). 디스패치
    직후의 `get_task` 안전망도 대개 크래시 착륙 전을 읽는다. 오래 머문 행을
    폴링해 권위 있게 다시 읽는 것 말고는 알아낼 방법이 없다.
 2. **`remediating` + 올라간 revision + 그 revision의 Task 0개.** `remediate`가
@@ -35,7 +35,7 @@ DB도 컨테이너도 없이 시험할 수 있다(`tests/orchestrator/test_recon
   분류도 두지 않는다"고 적혀 있었다. 바로 아래 캡이 생기면서 거짓이 됐고,
   같은 docstring 안에서 다음 문단과 모순됐다.)
 
-Task 12 추가: **재시도 상한(캡)**. `dispatch_agent`의 `attempt`(= 그 회차의 행 수)에는
+**재시도 상한(캡)**. `dispatch_agent`의 `attempt`(= 그 회차의 행 수)에는
 스스로 상한이 없다 — 영원히 크래시하는 에이전트가 있으면 리컨실러가 영원히
 재디스패치한다. 그래서 캡을 여기(`next_action`)에 둔다: 관측된 실패 행 수가
 `retry.max_attempts(failure_class)`에 닿으면 DISPATCH 대신 `GIVE_UP`을 고른다.
@@ -43,7 +43,7 @@ Task 12 추가: **재시도 상한(캡)**. `dispatch_agent`의 `attempt`(= 그 �
 시도했는가"라는 순수 관측이므로, 여기 두어도 리컨실러 소관을 벗어나지 않는다
 (엔진의 상태 전이 규칙 자체는 여전히 `workflow.py`와 `engine._transition`에만 있다).
 
-리뷰 라운드 1 추가: **PROBE가 영원히 끝나지 않는 경우의 안전망.** 실측으로
+**PROBE가 영원히 끝나지 않는 경우의 안전망.** 실측으로
 확인한 것 — a2a-sdk 1.1.2는 같은 컨테이너에서 연속으로 두 번째 크래시가 나면
 이벤트 소비자가 종료 상태로의 전이를 누락하는 경우가 있다(Producer 쪽 로그는
 남지만 Consumer 쪽 "Failed" 처리가 없다). 그러면 `get_task`가 영원히
@@ -149,7 +149,7 @@ def _exhausted_row(current: list[WorkflowTask], agent: str) -> WorkflowTask | No
     EXECUTION으로 본다 — POISON(1회)만큼 성급하지 않고 TRANSPORT(3회)만큼
     낙관적이지도 않은 중간값이다.
 
-    반환값은 `GIVE_UP` 액션의 `tasks`에 실린다 — 리뷰 라운드 1: 리컨실러가
+    반환값은 `GIVE_UP` 액션의 `tasks`에 실린다 — 리컨실러가
     "어떤 에이전트가 어떤 분류로 예산을 다 썼는지"를 실행부(`_execute`)에
     함께 넘겨야 그 정보가 아웃박스 이벤트까지 닿는다.
     """
@@ -180,14 +180,13 @@ def next_action(
     if (now - last_activity(req, rows)).total_seconds() < stale_after_s:
         return None  # 진행 중일 수 있다 — 손대지 않는다.
 
-    # 요구사항 전체 시간 예산(Task 11, 스펙 SP1 §12.2 → SP2). SP1 은 배선하지
+    # 요구사항 전체 시간 예산(스펙 SP1 §12.2 → SP2). SP1 은 배선하지
     # 않았다 — 스텁은 초 단위로 끝나 시간 축 규칙이 필요 없었기 때문이다.
     # SP2 에서 실제 LLM 지연이 붙어 "느린 것"과 "멈춘 것"을 나이만으로 가르기
     # 어려워졌고, 그래서 요구사항에도 상한이 필요해졌다.
     #
-    # **원칙: 예산은 새 일을 막을 뿐, 이미 끝난 일을 버리지 않는다.** (리뷰
-    # 라운드 1) 처음 구현은 이 검사를 함수 맨 앞, ACTIVE 게이트보다도 앞에
-    # 두었다 — 그러면 마지막 검증자가 이미 PASS를 써서 FINISH를 돌려줘야 할
+    # **원칙: 예산은 새 일을 막을 뿐, 이미 끝난 일을 버리지 않는다.** 이
+    # 검사를 함수 맨 앞, ACTIVE 게이트보다도 앞에 두면 마지막 검증자가 이미 PASS를 써서 FINISH를 돌려줘야 할
     # 요구사항이, 같은 폴링에서 나이가 run_s를 넘겼다는 이유만으로 GIVE_UP을
     # 받는다. 실제로 끝난 작업을 "느리다"와 구분 없이 버리는 것이라 예산의
     # 취지에 어긋난다. 그래서 이 검사는 **여기**(ACTIVE·staleness 게이트
@@ -202,7 +201,7 @@ def next_action(
     current = [t for t in rows if t.revision == req.revision]
     open_rows = tuple(t for t in current if t.state in OPEN_TASK_STATES)
     if open_rows:
-        # 리뷰 라운드 1: PROBE로 물어봐도 SDK가 영원히 비종료 상태만 돌려줄 수
+        # PROBE로 물어봐도 SDK가 영원히 비종료 상태만 돌려줄 수
         # 있다(실측한 a2a-sdk 1.1.2 결함) — 그러면 실패 행이 안 생겨 캡도
         # 작동하지 않는다. 열린 행 자체가 `stuck_after_s`보다 오래됐으면 더
         # 묻지 않고 강제로 실패 확정한다. 한 번에 한 걸음: 갇힌 행만 처리하고
@@ -277,7 +276,7 @@ class Reconciler:
         self._stale_after = stale_after_s
         self._stuck_after = stuck_after_s
         self._run_s = run_s
-        # 운영 신호 1(Task 14): 같은 task_id가 PROBE된 반복 횟수. a2a-sdk 1.1.2가
+        # 운영 신호 1: 같은 task_id가 PROBE된 반복 횟수. a2a-sdk 1.1.2가
         # 종료 전이를 누락하면(리컨실러 docstring 참고) 이 값이 매 주기 계속
         # 올라간다 — "PROBE가 비정상적으로 오래 반복된다"는 그 자체로는 로그를
         # 뒤져야 알 수 있던 증상을 span 속성으로 바로 드러낸다.
@@ -357,7 +356,7 @@ class Reconciler:
 
         `now`는 `next_action`이 이 동작을 고를 때 쓴 것과 같은 DB 서버 시계
         스냅샷이다 — PROBE 반복·FORCE_FAIL 시점의 "행 나이"를 재는 기준을
-        판정 로직과 일치시킨다(운영 신호 1·2, Task 14).
+        판정 로직과 일치시킨다(운영 신호 1·2).
         """
         with tracer.start_as_current_span(
             f"reconciler.{action.kind}",
@@ -408,7 +407,7 @@ class Reconciler:
                         fc = FailureClass(task.failure_class) if task.failure_class else FailureClass.EXECUTION
                         await self._engine.give_up(requirement_id, task.agent, fc)
                 else:
-                    # 리뷰 라운드 1 회귀 수정: `run_s` backstop은 특정 실패 행이
+                    # `run_s` backstop은 특정 실패 행이
                     # 아니라 요구사항 나이 자체가 근거라 `tasks`가 비어 있을 수
                     # 있다(예: REMEDIATING인데 이번 회차에 Task가 아직 하나도
                     # 없는 채로 예산을 다 쓴 경우). 이전에는 이 분기가 없어서
@@ -419,7 +418,7 @@ class Reconciler:
                     # 관측된 상태를 그대로 강제 종료한다.
                     await self._engine.give_up_on_budget(requirement_id)
             elif action.kind == FORCE_FAIL:
-                # 리뷰 라운드 1: PROBE로도 끝나지 않는 행(SDK 결함으로 종료 상태가
+                # PROBE로도 끝나지 않는 행(SDK 결함으로 종료 상태가
                 # 영영 안 오는 경우)에 대한 안전망. 더 묻지 않고 실행 중 원인
                 # 불명 오류로 확정한다 — 이후로는 평범한 실패 행이라 다음 주기의
                 # 캡 계산이 정상적으로 이어받는다.

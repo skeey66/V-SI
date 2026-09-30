@@ -19,8 +19,8 @@ requirement_id 를 받지 않는 것이 이 설계의 요점이다 — 모델이
 `dev` 인스턴스에는 애초에 `run_tests` 라는 도구가 존재하지 않으므로, 잘못
 호출하면 "그런 도구 없음"으로 실패한다(권한 거부가 아니라 존재하지 않음).
 
-구현자 주의 (브리프 대비 실제 SDK 차이): 브리프는 `mcp>=1.2.0` 을 넣고
-`from mcp.server.fastmcp import FastMCP` 를 스케치했지만, 설치 시점에 그
+주의 (초기 설계와 다른 실제 SDK): 처음엔 `mcp>=1.2.0` 을 넣고
+`from mcp.server.fastmcp import FastMCP` 를 쓰려 했지만, 설치 시점에 그
 제약을 만족하는 최신판은 `mcp==2.2.0` 이었다. 이 버전은 `FastMCP` 를
 `MCPServer` 로 개명했고 `mcp.server.fastmcp` 는 마이그레이션 안내만 던지는
 모듈로 남아 있다(`mcp.server.mcpserver.MCPServer` 로 이동). `@mcp.tool()`
@@ -65,7 +65,7 @@ from tool_server.paths import PathEscape, workspace_root
 WORKSPACE_BASE = Path(os.environ.get("VSI_WORKSPACE_BASE", "/workspace"))
 
 #: 스펙 §5.2 의 권한 표. 개발에게 `run_tests` 가 없는 것은 의도다(§5.4).
-#: Task 6 의 `Role.tools` 와 값이 겹치는 것도 의도다 — 서버는 에이전트를
+#: `llm_agent.roles` 의 `Role.tools` 와 값이 겹치는 것도 의도다 — 서버는 에이전트를
 #: 신뢰하지 않으므로, 권한이 에이전트 쪽에만 있으면 에이전트가 보내는 값이
 #: 곧 권한이 된다. 이 표가 서버 쪽의 독립된 판단 기준이다. **집행은 아래
 #: `_build_role_server` 가 이 표를 읽어 역할별 서버에 도구를 실제로
@@ -92,7 +92,7 @@ def _ctx_root(requirement_id: str) -> Path:
 
 
 #: 방어적 재검증. `requirement_id` 는 도구 인자로는 받되(스키마에서 이를
-#: 제거하고 세션 값을 주입하는 것은 Task 5 의 몫), 서버는 클라이언트가
+#: 제거하고 세션 값을 주입하는 것은 MCP 브리지의 몫), 서버는 클라이언트가
 #: 그 인자를 순순히 지킨다고 가정하지 않는다. `workspace_root` 가
 #: `PathEscape` 를 던지면 여기서 잡아 다른 모든 도구 오류와 같은
 #: `{"ok": False, "detail": ...}` 모양으로 되돌린다 — 설치된 SDK 가 우연히

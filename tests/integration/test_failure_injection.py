@@ -1,13 +1,12 @@
-"""Task 12 통합 시험 — 실패 분류·재시도·재시도 상한(캡).
+"""실패 분류·재시도·재시도 상한(캡) 통합 시험.
 
-앞의 두 시험은 브리프 스케치 그대로다. **둘 다 Task 12의 새 코드 없이도 이미
-통과한다** — Task 13(리컨실러)이 먼저 구현되면서 `dispatch_agent`가 `attempt`를
-`COUNT+1`로 자동 계산하게 됐고, 리컨실러가 크래시한 dev 행을 관측해 새 행으로
+앞의 두 시험은 **실패 분류·재시도 코드 없이도 이미 통과한다** — 리컨실러가
+있으면 `dispatch_agent`가 `attempt`를 `COUNT+1`로 자동 계산하고, 리컨실러가 크래시한 dev 행을 관측해 새 행으로
 재디스패치하기 때문이다(전송/실행/독성입력의 5분류·`classify`·`backoff_seconds`가
 없어도 "죽은 행 대신 새 행을 보낸다"는 이미 성립한다). 그래서 이 두 시험은
-Task 12 코드의 RED/GREEN 증거가 아니라 **회귀 방지**로 남긴다.
+재시도 코드의 RED/GREEN 증거가 아니라 **회귀 방지**로 남긴다.
 
-세 번째 시험이 Task 12가 실제로 추가하는 것 — **재시도 상한(캡)**을 시험한다.
+세 번째 시험이 재시도 정책이 실제로 추가하는 것 — **재시도 상한(캡)**을 시험한다.
 `test_reconcile.py`의 케이스 2·3과 같은 방식으로 DB에 실패 상태를 손으로
 만들어 놓고, **오케스트레이터 컨테이너 안에서 도는 진짜 리컨실러**가 세 번째
 dev를 다시 보내는 대신 포기하는지 본다.
@@ -18,10 +17,10 @@ dev를 다시 보내는 대신 포기하는지 본다.
 관측했다(Producer 쪽 로그는 남지만 Consumer 쪽 "Failed" 로그와 상태 전이가
 없다 — `docker compose logs dev`로 재현 가능). 이는 스텁/SDK 쪽 문제이지
 오케스트레이터의 캡 로직과 무관하므로, 여기서는 그 경로에 기대지 않고 DB에
-직접 실패 행을 심어 캡만 독립적으로 시험한다. Task 14 이후 실제 크래시가
+직접 실패 행을 심어 캡만 독립적으로 시험한다. 실제 크래시가
 연속으로 나는 운영 시나리오를 다시 만난다면 이 관찰을 참고할 것.
 
-네 번째 시험은 그 실측을 코드로 만든 안전망(`FORCE_FAIL`, 리뷰 라운드 1)을
+네 번째 시험은 그 실측을 코드로 만든 안전망(`FORCE_FAIL`)을
 시험한다: 위 SDK 결함이 실제로 발생해 어떤 행이 `working`에서 영원히 멈춰도
 (get_task가 영영 비종료 상태만 돌려줘도) 시스템은 그 결함의 존재 여부와
 무관하게 종료 상태에 도달해야 한다는 게 이 프로젝트의 핵심 보장이다. 진짜
@@ -64,7 +63,7 @@ async def test_no_duplicate_idempotency_keys():
 
 
 async def test_permanently_crashing_agent_stops_instead_of_looping_forever():
-    """Task 12의 캡: EXECUTION 상한(2)을 채운 dev를 리컨실러가 더 재디스패치하지 않는다.
+    """재시도 캡: EXECUTION 상한(2)을 채운 dev를 리컨실러가 더 재디스패치하지 않는다.
 
     `test_reconcile.py` 케이스 2·3과 같은 방식으로 크래시가 남긴 DB 상태를
     손으로 만든다 — planner는 끝났고 dev는 이미 두 번(캡만큼) 실패했다. 캡이
@@ -130,7 +129,7 @@ async def test_permanently_crashing_agent_stops_instead_of_looping_forever():
 
         escalations = [e for e in final.events if e.payload.get("to") == "escalated"]
         assert len(escalations) == 1
-        # 리뷰 라운드 1: 운영자가 회차 상한 초과(remediate)와 재시도 예산
+        # 운영자가 회차 상한 초과(remediate)와 재시도 예산
         # 소진(give_up)을 구분하고, 어느 에이전트가 원인인지 알 수 있어야 한다.
         assert escalations[0].payload["reason"] == "retry_budget_exhausted"
         assert escalations[0].payload["agent"] == "dev"
@@ -140,7 +139,7 @@ async def test_permanently_crashing_agent_stops_instead_of_looping_forever():
 
 
 async def test_stuck_row_past_ceiling_reaches_a_terminal_state_anyway():
-    """Task 12 리뷰 라운드 1의 핵심 보장: SDK가 종료 상태를 영영 안 줘도 시스템은 멈추지 않는다.
+    """핵심 보장: SDK가 종료 상태를 영영 안 줘도 시스템은 멈추지 않는다.
 
     dev의 `working` 행 하나를 `stuck_after_s`보다 훨씬 오래된 것으로 심는다 —
     이 행에 대응하는 실제 a2a Task는 없다(`fake-...`). `FORCE_FAIL`이 `get_task`를

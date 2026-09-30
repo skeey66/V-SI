@@ -15,7 +15,7 @@ def test_verdict_sequence_repeats_last_when_exhausted():
     s = AgentScenario.from_yaml(PATH, "qa")
     drained = [s.next_verdict() for _ in range(3)]
     assert drained == ["FAIL", "FAIL", "PASS"]
-    # 소진 이후에는 마지막 값을 계속 반복해야 한다 — Task 11 의 단일 원소 시나리오가 이에 의존한다
+    # 소진 이후에는 마지막 값을 계속 반복해야 한다 — 환류 루프의 단일 원소 시나리오가 이에 의존한다
     assert [s.next_verdict() for _ in range(5)] == ["PASS"] * 5
 
 

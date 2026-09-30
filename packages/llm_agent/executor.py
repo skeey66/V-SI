@@ -13,10 +13,10 @@ CANCELED/REJECTED/INPUT_REQUIRED/AUTH_REQUIRED 뿐이다). 아티팩트 없이
 FAILED 로 끝나면 오케스트레이터는 EXECUTION 실패로 분류해 재시도·환류 상한을
 이어받는다(스펙 §10).
 
-**브리프(Task 9 계획) 대비 실제 인터페이스 차이, 전부 실측 확인:**
+**초기 설계와 달랐던 실제 인터페이스, 전부 실측 확인:**
 
 1. MCP `Tool` 객체는 `inputSchema` 가 아니라 `input_schema`(스네이크케이스)를
-   낸다 — 설치된 mcp SDK 를 `tests/llm_agent/test_mcp_client.py`/Task 5 리뷰가
+   낸다 — 설치된 mcp SDK 를 `tests/llm_agent/test_mcp_client.py` 가
    이미 확인했다. `tool_schemas` 는 두 철자를 다 받지만, 여기서 `dict` 를
    만들 때 실제 속성명을 써야 `AttributeError` 로 첫 도구 목록 조회에서
    죽지 않는다.
@@ -28,14 +28,13 @@ FAILED 로 끝나면 오케스트레이터는 EXECUTION 실패로 분류해 재�
 3. MCP 서버는 역할별로 `/mcp/<role>/` 에 따로 마운트된다
    (`services/tool_server/main.py`). 이 클래스는 role 을 URL 에 엮지 않는다 —
    생성자에 role 이 이미 반영된 `mcp_url` 을 그대로 받아 쓴다. 엮는 책임은
-   이 클래스를 생성하는 쪽(Task 12 의 `build_executor`)에 있다.
+   이 클래스를 생성하는 쪽(진입점의 `build_executor`)에 있다.
 4. `mcp.client.streamable_http` 의 공개 함수 이름은 `streamablehttp_client` 가
    아니라 `streamable_http_client` 이고, 그 컨텍스트매니저는
    `(read_stream, write_stream)` 2-튜플만 낸다 — 구버전 SDK 의 3-튜플
    `(read, write, get_session_id)` 패턴이 아니다.
 
-**리뷰 라운드 1 에서 추가된 것 (교차 참조: `docs/plans` 없음, 이 파일 안에서
-새로 판단):**
+**추가 방어 장치:**
 
 - **`mcp_url` 이 실제로 이 역할의 도구를 광고하는지 확인한다.** 잘못된 마운트
   경로(예: `dev` 가 `/mcp/qa/` 를 바라봄)로도 `ToolBridge` 의 허용 목록 검사가
@@ -49,7 +48,7 @@ FAILED 로 끝나면 오케스트레이터는 EXECUTION 실패로 분류해 재�
   한 줄도 못 썼다 — 성공으로 위장한 무동작. 그래서 도구 목록을 받은 직후,
   `role.tools` 가 전부 스키마에 있는지 확인하고 없으면 `McpRoleMismatch` 로
   요란하게 죽는다. 시끄러운 기동 실패가 조용한 성공보다 낫다.
-- **자문 이벤트 기록 실패가 에이전트 실행을 끝내면 안 된다.** Task 8 은
+- **자문 이벤트 기록 실패가 에이전트 실행을 끝내면 안 된다.** 자문 이벤트는
   `on_tool` 을 인라인 `await` 로 부르기로 했다(백그라운드 `create_task` 의
   가비지 컬렉션 위험을 피하려고) — 그 판단은 유지한다. 하지만 `loop.py` 는
   `on_tool` 을 무조건 `await` 만 할 뿐 그 실패를 흡수하지 않는다(그건
@@ -181,8 +180,7 @@ class LlmExecutor(AgentExecutor):
             except Exception:
                 # 자문 이벤트는 워크플로 권위가 없다(`events.py`, 스펙 §8.1) —
                 # 이 기록이 실패해도 에이전트 실행 자체가 죽으면 안 된다.
-                # 인라인 `await` (Task 8 의 판단)는 유지하고 실패만 여기서
-                # 삼킨다.
+                # 인라인 `await` 는 유지하고 실패만 여기서 삼킨다.
                 logger.exception(
                     "자문 이벤트 기록 실패 — 에이전트 실행은 계속한다 "
                     "(requirement_id=%s, tool=%s)", requirement_id, name,
@@ -191,7 +189,7 @@ class LlmExecutor(AgentExecutor):
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as http:
             llm = OllamaClient(self._ollama_url, self._model, http)
             # `mcp==2.2.0` 의 `streamable_http_client` 는 2-튜플만 낸다
-            # (`read_stream`, `write_stream`) — 브리프가 가정한 3-튜플
+            # (`read_stream`, `write_stream`) — 초기 설계가 가정한 3-튜플
             # `(read, write, _)`(구버전 SDK 패턴)이 아니다. 소스를 직접
             # 확인했다(`mcp/client/streamable_http.py`: `yield read_stream,
             # write_stream`).
@@ -256,8 +254,8 @@ class LlmExecutor(AgentExecutor):
             await updater.failed()
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
-        # 브리프는 `updater.failed()` 를 스케치했지만, SP1 `StubExecutor.cancel`
-        # 은 `updater.cancel()` 을 쓴다(TASK_STATE_CANCELED, FAILED 가 아니다) —
+        # `updater.failed()` 가 아니라 `updater.cancel()` 을 쓴다. SP1
+        # `StubExecutor.cancel` 도 같다(TASK_STATE_CANCELED, FAILED 가 아니다) —
         # 취소 요청과 실행 실패는 다른 종단 상태이므로 SP1 관행을 따른다.
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)
         await updater.cancel()
@@ -266,13 +264,13 @@ class LlmExecutor(AgentExecutor):
 def _incoming_payload(context: RequestContext) -> dict:
     """A2A 메시지의 data Part 에서 디스패치 페이로드를 꺼낸다.
 
-    브리프는 `MessageToDict` 를 직접 손으로 돌리라고 했지만, 오케스트레이터
+    `MessageToDict` 를 직접 손으로 돌리지 않는다. 오케스트레이터
     쪽(`orchestrator/a2a_client.py`)이 보내는 쪽과 받는 쪽 모두 이미
     `a2a.helpers` 의 공개 헬퍼(`new_data_part`/`get_data_parts`)로 이 왕복을
     하고 있다 — 같은 대칭을 여기서도 쓴다. 실측: 살아있는 compose 스택에
     `POST /requirements` 를 던져 dev 컨테이너 로그로 확인한 실제 페이로드는
-    `[{"requirement_id": "..."}]` 하나짜리 리스트였다(SP1 이 아직 title/
-    revision/feedback 을 안 보낸다 — Task 10 이 그걸 넓힌다).
+    `[{"requirement_id": "..."}]` 하나짜리 리스트였다(SP1 은 title/
+    revision/feedback 을 보내지 않았다 — 디스패치 페이로드 확장이 그걸 넓혔다).
     """
     message = context.message
     if message is None:

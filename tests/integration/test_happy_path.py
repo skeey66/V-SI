@@ -33,14 +33,14 @@ async def test_events_recorded_for_every_transition() -> None:
     완료마다 이벤트 행 하나를 기록한다(어떤 종류로, 어떤 aggregate로, 어떤
     순서로).
 
-    리뷰 라운드 1 이전 버전은 `all(e.published_at is None for e in
+    예전 버전은 `all(e.published_at is None for e in
     result.events)`를 같이 확인했는데, 그건 오케스트레이터의 불변식이 아니라
     게이트웨이의 불변식이었다 — 게이트웨이는 요구사항별 구독 필터 없이 전역
     브로드캐스트하므로, 이 시험이 도는 순간 다른 WebSocket 클라이언트(그래프
     UI 등)가 붙어 있으면 그 클라이언트에게 실제로 전달되고 정상적으로
     `published_at`이 찍힌다 — 그게 게이트웨이의 설계대로 동작하는 것이다.
     그 assert는 "아무도 안 보고 있다"는 우연에 기대 통과해 왔을 뿐이고, 실제로
-    그래프 UI를 켜 둔 채로 이 스위트를 돌리면 깨졌다(Task 17에서 확인).
+    그래프 UI를 켜 둔 채로 이 스위트를 돌리면 깨졌다.
     "새로 쓴 행은 미발행 상태로 커밋된다"는 쓰기 쪽 계약은
     `tests/orchestrator/test_outbox.py::test_state_change_and_event_commit_together`
     가 이미 살아 있는 게이트웨이 없이(로컬 스키마, 클라이언트 없음) 고정하고
@@ -74,7 +74,7 @@ async def test_events_recorded_for_every_transition() -> None:
 
 
 async def test_tasks_carry_verdicts_and_distinct_idempotency_keys() -> None:
-    """Task 11·12가 소비하는 필드들이 실제로 채워졌는지 고정한다."""
+    """환류·재시도가 소비하는 필드들이 실제로 채워졌는지 고정한다."""
     result = await run_scenario(SCENARIO, "REQ-003", "비밀번호 재설정")
 
     by_agent = {t.agent: t for t in result.tasks}

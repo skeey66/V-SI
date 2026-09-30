@@ -1,10 +1,10 @@
 """오케스트레이터 서비스.
 
 컨테이너로 떠 있어야 하는 이유는 둘이다: 에이전트가 푸시 콜백을 보낼 주소가
-있어야 하고(`VSI_PUSH_URL`), Task 13의 SIGKILL 테스트가 이 컨테이너를 죽였다
-살린다.
+있어야 하고(`VSI_PUSH_URL`), 리컨실리에이션 통합 테스트가 이 컨테이너를
+SIGKILL로 죽였다 살린다.
 
-OTel 계측(Task 14): `setup_tracing`은 이 모듈에서 다른 무엇보다도 먼저
+OTel 계측: `setup_tracing`은 이 모듈에서 다른 무엇보다도 먼저
 불러야 한다 — 아래에서 만드는 공유 httpx 클라이언트(`http`, 모든 에이전트로
 나가는 submit/get_task 호출에 쓰인다)를 계측된 클라이언트로 만들고, 계측
 라이브러리가 계측 시점에 고정하는 전역 TracerProvider가 실제 익스포터를 갖고
@@ -81,11 +81,11 @@ reconciler = Reconciler(
     workflow,
     interval_s=float(os.environ.get("VSI_RECONCILE_INTERVAL_S", DEFAULT_INTERVAL_S)),
     stale_after_s=float(os.environ.get("VSI_RECONCILE_STALE_S", DEFAULT_STALE_AFTER_S)),
-    # 리뷰 라운드 1: PROBE로도 안 끝나는 행(SDK 결함) 안전망. 운영 기본값은
+    # PROBE로도 안 끝나는 행(SDK 결함) 안전망. 운영 기본값은
     # stale_after_s보다 한 자릿수 이상 크게 잡아 정상적으로 느린 실행을
     # 강제로 끊지 않는다.
     stuck_after_s=float(os.environ.get("VSI_RECONCILE_STUCK_S", DEFAULT_STUCK_AFTER_S)),
-    # Task 11: 요구사항 전체 시간 예산 backstop. `VSI_TIMEOUT_RUN_S`(policy.py)와
+    # 요구사항 전체 시간 예산 backstop. `VSI_TIMEOUT_RUN_S`(policy.py)와
     # 같은 값을 쓴다 — 같은 예산을 두 곳에서 서로 다른 env var로 따로
     # 설정하게 두면 운영 중 둘이 어긋나기 쉽다.
     run_s=float(timeouts.run_s),
@@ -116,7 +116,7 @@ async def _on_push(body: dict) -> None:
     에이전트는 이 POST가 끝날 때까지 자신의 이벤트 소비 루프를 붙잡고 기다린다.
     여기서 파이프라인 다음 단계 전체를 동기로 돌면 그 대기가 연쇄적으로 길어지고,
     에이전트 쪽 푸시 타임아웃에 걸려 "성공했는데 실패로 로깅되는" 상태가 된다.
-    유실은 Task 13의 리컨실리에이션이 덮는다.
+    유실은 리컨실리에이션이 덮는다.
     """
     _spawn(workflow.on_push_notification(body), "push")
 
@@ -347,7 +347,7 @@ async def _startup() -> None:
     ).initialize()
     logger.info("스키마 준비 완료")
 
-    # 리컨실리에이션 루프(Task 13)는 평시에도 돈다. 크래시 복구가 별도의 경로가
+    # 리컨실리에이션 루프는 평시에도 돈다. 크래시 복구가 별도의 경로가
     # 아니라 **항상 돌고 있는 같은 루프**여야, 재기동 직후에도 특별히 할 일이 없다 —
     # 그냥 다음 주기에 현재 상태를 보고 이어서 수렴시킨다.
     _spawn(reconciler.run_forever(), "reconciler")

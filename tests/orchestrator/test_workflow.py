@@ -27,7 +27,7 @@ def test_limit_exceeded_escalates():
 
 
 def test_limit_exceeded_also_escalates_from_dispatch_states():
-    """Task 12: 재시도 캡을 넘긴 에이전트는 remediating이 아닌 상태에서도 나온다.
+    """재시도 캡을 넘긴 에이전트는 remediating이 아닌 상태에서도 나온다.
 
     planner/dev가 영원히 크래시하면 PLANNED/IMPLEMENTING에서, 검증 에이전트가
     영원히 크래시하면 VERIFYING에서 리컨실러가 포기를 결정한다(`engine.give_up`).

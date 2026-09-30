@@ -39,7 +39,7 @@ async def test_qa_cannot_write_files() -> None:
 
 
 async def test_write_file_schema_carries_path_and_content() -> None:
-    """Task 5 가 이 스키마로 클라이언트를 만든다 — 배선이 끊기면 여기서 잡는다."""
+    """MCP 브리지가 이 스키마로 클라이언트를 만든다 — 배선이 끊기면 여기서 잡는다."""
     tools = await ROLE_SERVERS["dev"].list_tools()
     write_file_tool = next(t for t in tools if t.name == "write_file")
     assert write_file_tool.input_schema["properties"].keys() >= {"path", "content"}

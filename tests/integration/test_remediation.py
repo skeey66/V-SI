@@ -19,9 +19,9 @@ import pytest
 from orchestrator.workflow import RequirementState
 from tests.integration.harness import run_scenario
 
-#: 브리프는 `scenarios/qa_fails_twice.yaml`을 지정했지만 그 시나리오의 dev에는
-#: `attempt_2: crash`가 들어 있다 — Task 7 판정이 정의한 **재시도(Task 12)**용
-#: fixture다. 재시도가 없는 지금은 revision 2의 dev가 FAILED로 멈춰 환류 루프가
+#: `scenarios/qa_fails_twice.yaml`은 쓰지 않는다 — 그 시나리오의 dev에는
+#: `attempt_2: crash`가 들어 있어 스텁 Executor 결정이 정의한 **재시도**용
+#: fixture다. 재시도 없이 쓰면 revision 2의 dev가 FAILED로 멈춰 환류 루프가
 #: 아니라 재시도의 부재를 시험하게 된다(실측: SDK는 실패 경로에서 푸시를 보내지
 #: 않아 오케스트레이터가 크래시를 알지도 못한다). 그래서 verdict 순서는 같고
 #: 크래시만 없는 시나리오를 따로 두고 여기서는 환류만 본다.

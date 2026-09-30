@@ -34,10 +34,10 @@ def _payload_to_part(payload: dict) -> Part:
 class StubExecutor(AgentExecutor):
     """LLM을 호출하지 않는다. 시나리오가 지시한 결과만 만든다.
 
-    구현자 주의(브리프 대비 실제 SDK 1.1.2 시그니처 차이):
-    - `AgentExecutor`는 `execute` 외에 `cancel`도 추상 메서드다(브리프 스케치는
-      `execute`만 언급했으나, 상속하려면 둘 다 구현해야 한다).
-    - `EventQueue.enqueue_event(event)`는 브리프 스케치와 동일하지만, 실제로는
+    주의(SDK 1.1.2 실제 시그니처):
+    - `AgentExecutor`는 `execute` 외에 `cancel`도 추상 메서드다(상속하려면 둘 다
+      구현해야 한다).
+    - `EventQueue.enqueue_event(event)`는 실제로는
       `Message`/`Task`/`TaskStatusUpdateEvent`/`TaskArtifactUpdateEvent` 중
       하나의 이벤트 객체를 기대한다. 원시 dict를 그대로 enqueue할 수 없으므로
       `TaskUpdater` 헬퍼로 표준 이벤트를 만든다.
@@ -46,8 +46,8 @@ class StubExecutor(AgentExecutor):
       `google.protobuf.json_format.ParseDict`로 변환한다.
     - `build_payload`는 동기 메서드로 유지한다(단위 테스트가 직접 호출한다). 대신
       `latency_ms` 지연은 `execute()`에서 `await asyncio.sleep(...)`로 처리한다 —
-      동기 `time.sleep`을 여기 두면 이벤트 루프 전체가 블로킹돼 Task 8/10에서
-      에이전트를 동시 기동/병렬 디스패치할 때 알 수 없는 직렬화를 일으킨다.
+      동기 `time.sleep`을 여기 두면 이벤트 루프 전체가 블로킹돼 에이전트를
+      동시 기동/병렬 디스패치할 때 알 수 없는 직렬화를 일으킨다.
 
     `attempt`는 이 스텁 자신의 호출 순번이다(`AgentScenario.next_attempt()`가 관리) —
     오케스트레이터의 재시도 카운터(`workflow_tasks.attempt`)와는 이름만 같은 별개의
@@ -87,8 +87,7 @@ class StubExecutor(AgentExecutor):
         TASK_STATE_ERROR로 변환한다(에이전트 프로세스 크래시를 흉내낸다).
         이는 "FAIL 판정"(정상 완료, exit_code != 0)과는 다른 경로다.
 
-        Task 10에서 추가된 것(Task 8은 기동만 검증했고 실행 경로는 한 번도
-        돌지 않았다): **상태 갱신 이벤트보다 Task 이벤트를 먼저 큐에 넣어야 한다.**
+        **상태 갱신 이벤트보다 Task 이벤트를 먼저 큐에 넣어야 한다.**
         SDK의 `TaskManager`는 Task가 저장되기 전에 도착한 `TaskStatusUpdateEvent`를
         `InvalidAgentResponseError: Agent should enqueue Task before
         TaskStatusUpdateEvent event`로 거절한다

@@ -28,7 +28,7 @@ def test_runtime_error_is_execution():
 def test_timeout_error_is_transport():
     """asyncio.wait_for가 던지는 내장 TimeoutError도 전송 실패다.
 
-    엔진이 개별 submit 시도를 `self._timeouts.tool_s`로 감싸므로(Task 12),
+    엔진이 개별 submit 시도를 `self._timeouts.tool_s`로 감싸므로,
     거기서 나는 타임아웃도 httpx의 타임아웃과 같은 층으로 분류돼야 한다.
     """
     assert classify(TimeoutError("tool timeout")) is FailureClass.TRANSPORT

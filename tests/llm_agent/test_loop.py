@@ -431,7 +431,7 @@ async def test_a_hanging_chat_call_is_bounded_by_the_remaining_budget() -> None:
     assert elapsed < 2.0
 
 
-# --- 리뷰 라운드 1 수정 사항 ------------------------------------------------
+# --- 회귀 방지 ---------------------------------------------------------------
 
 
 class _AdvancingClock:

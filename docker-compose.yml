@@ -2,9 +2,8 @@ services:
   jaeger:
     # OTel Collector를 별도로 두지 않는다 — Jaeger all-in-one이 OTLP/HTTP를
     # 직접 받는다(서비스 하나 절약). 4318이 OTLP/HTTP 수신 포트, 16686이 UI/쿼리 API.
-    # 브리프는 `1.62`를 지정했으나 그 태그는 존재하지 않는다(레지스트리에는
-    # `1.62.0`처럼 패치 버전까지 붙은 태그만 있다) — 패치 버전을 채운
-    # `1.62.0`으로 고정한다.
+    # `1.62` 태그는 존재하지 않는다(레지스트리에는 `1.62.0`처럼 패치 버전까지
+    # 붙은 태그만 있다) — 패치 버전을 채운 `1.62.0`으로 고정한다.
     image: jaegertracing/all-in-one:1.62.0
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
@@ -31,7 +30,7 @@ services:
       VSI_PUSH_URL: http://orchestrator:8000/push
       VSI_PUSH_TOKEN: ${VSI_PUSH_TOKEN:-dev-only-token}
       VSI_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
-      # Task 14: 정체 천장. 에이전트 자기 예산(600초, packages/llm_agent/loop.py의
+      # 정체 천장. 에이전트 자기 예산(600초, packages/llm_agent/loop.py의
       # BUDGET_S)보다 커야 정상 작업이 강제 실패당하지 않는다 — "느린 작업"이
       # 아니라 "죽은 프로세스"만 잡는다.
       VSI_RECONCILE_STUCK_S: ${VSI_RECONCILE_STUCK_S:-900}
@@ -84,7 +83,7 @@ services:
       postgres: { condition: service_healthy }
       orchestrator: { condition: service_healthy }
     ports: ["8001:8000"]
-    # Task 13: 에이전트는 두 네트워크가 다 필요하다 — MCP 도구 서버(`workspace`,
+    # 에이전트는 두 네트워크가 다 필요하다 — MCP 도구 서버(`workspace`,
     # internal 전용)와 호스트의 Ollama(기본 네트워크를 통한 기본 게이트웨이
     # 경유). agent_entry의 기본 MCP URL이 `http://workspace:8000/mcp/{AGENT}/`을
     # 가정하므로(packages/agent_entry/main.py) 서비스 이름이 `workspace`와
@@ -134,12 +133,12 @@ services:
     networks: [internal]
 
   web:
-    # Task 16: 실시간 에이전트 그래프. 이벤트 게이트웨이의 WebSocket(8100)에
+    # 실시간 에이전트 그래프. 이벤트 게이트웨이의 WebSocket(8100)에
     # 브라우저에서 직접 붙는다 — 브라우저는 컴포즈 네트워크 밖에 있으므로
     # 컨테이너 내부 이름이 아니라 호스트에 노출된 포트로 접속해야 한다
     # (AgentGraph.tsx의 URL이 `ws://localhost:8100/ws`인 이유).
     #
-    # 브리프는 `node:22-alpine`을 지정했으나 이 환경의 레지스트리 프록시에서
+    # 처음엔 `node:22-alpine`을 쓰려 했으나 이 환경의 레지스트리 프록시에서
     # 그 태그만 계속 0바이트로 멈췄다(`node:20-alpine`, `hello-world`는 정상
     # 다운로드됨 — 실측으로 다른 태그를 확인). Vite 5는 Node 18+면 충분해
     # `20-alpine`(LTS, 정상적으로 받아지는 태그)으로 고정한다.
@@ -152,7 +151,7 @@ services:
 
 networks:
   default:
-  # Task 13: LLM이 쓴 코드가 실행되는 유일한 컨테이너(`workspace`)를 가두는
+  # LLM이 쓴 코드가 실행되는 유일한 컨테이너(`workspace`)를 가두는
   # 네트워크. `internal: true`는 컴포즈/도커가 이 네트워크에 외부 게이트웨이를
   # 만들지 않게 강제한다 — 인터넷으로 나가는 경로가 네트워크 계층에서부터
   # 없다. 에이전트 4종은 이 네트워크와 기본 네트워크에 동시에 붙어 MCP와

@@ -176,7 +176,7 @@ export function AgentGraph({ stream }: { stream: StreamState }) {
               escalated: {escalationReason}
               {/* give_up(재시도 예산 소진)은 agent/failure_class를 함께 싣는다 —
                   remediate(회차 상한 초과)는 reason뿐이다. 있을 때만 붙여
-                  두 원인을 구분한다(Task 12). */}
+                  두 원인을 구분한다. */}
               {escalationAgent && <> · agent: {escalationAgent}</>}
               {escalationFailureClass && <> · failure_class: {escalationFailureClass}</>}
             </p>

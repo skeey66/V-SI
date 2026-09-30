@@ -14,8 +14,8 @@
 # `all_pass_slow.yaml` 이 같은 이유로 지연을 넣는다 — 그쪽 주석 참고
 # ("kill 이 실행 **도중에** 떨어지게 하기 위해서다").
 #
-# 원본에 지연을 더하지 않고 파일을 나누는 이유: `verdicts_fail_twice` 는 Task 11
-# 의 환류 루프 시험들이 쓴다. 그쪽은 창을 관측할 필요가 없고, 지연을 얹으면
+# 원본에 지연을 더하지 않고 파일을 나누는 이유: `verdicts_fail_twice` 는 환류
+# 루프 시험들이 쓴다. 그쪽은 창을 관측할 필요가 없고, 지연을 얹으면
 # 아무 이득 없이 느려지기만 한다.
 scenario: verdicts_fail_twice_slow
 agents:

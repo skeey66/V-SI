@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 /**
  * 게이트웨이가 보내는 메시지 그대로다(services/event_gateway). payload는
- * 이벤트 종류별로 다른 필드를 싣는다 — Task 16 브리프의 표를 참고.
+ * 이벤트 종류별로 다른 필드를 싣는다 — 아래 리듀서의 분기를 참고.
  */
 export type VsiEvent = {
   event_id: number;
@@ -146,7 +146,7 @@ export function reduceEvents(state: StreamState, e: VsiEvent): StreamState {
       if (to === "escalated") {
         // remediate(회차 상한 초과)는 reason만 싣는다. give_up(재시도 예산
         // 소진)은 같은 트랜잭션·같은 이벤트에 agent/failure_class까지 실어
-        // 보낸다(Task 12) — 이게 있으면 give_up 경로, 없으면 remediate
+        // 보낸다 — 이게 있으면 give_up 경로, 없으면 remediate
         // 경로라는 뜻이므로 둘 다 읽어 화면에서 원인을 구분한다.
         escalationReason = (e.payload.reason as string | undefined) ?? null;
         escalationAgent = (e.payload.agent as string | undefined) ?? null;
@@ -183,7 +183,7 @@ export type EventStreamResult = StreamState & { status: ConnectionStatus };
 
 /**
  * WebSocket에 붙어 이벤트를 리듀서에 흘려보낸다. 스냅샷/백필이 없으므로
- * (Task 15 보고서 참고) 이 훅이 아는 것은 "연결한 뒤로 본 것"뿐이다 —
+ * (이벤트 게이트웨이는 연결 이후 이벤트만 흘린다) 이 훅이 아는 것은 "연결한 뒤로 본 것"뿐이다 —
  * 새로고침하면 activeAgents 등은 빈 상태에서 다시 시작한다. 그 사실을
  * 화면에서 숨기지 않고 `status`로 노출해 AgentGraph가 "이벤트 대기 중"
  * 안내를 보여줄 수 있게 한다.

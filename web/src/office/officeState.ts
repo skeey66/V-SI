@@ -172,7 +172,7 @@ export function reduceOffice(prev: OfficeState, e: VsiEvent): OfficeState {
         if (lastFailed) motions[lastFailed] = "hand-up";
       } else if (to === "escalated") {
         moodLight = "stopped";
-        // give_up 경로는 agent 를 실어 보낸다(Task 12). remediate 경로는 안 싣는다.
+        // give_up 경로는 agent 를 실어 보낸다. remediate 경로는 안 싣는다.
         const owner = isAgentId(e.payload.agent) ? e.payload.agent : lastFailed;
         handUp = owner ? { agent: owner, tone: "fail" } : null;
         if (owner) motions[owner] = "hand-up";

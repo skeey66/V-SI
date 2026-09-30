@@ -1,9 +1,9 @@
 """엔진의 재개 가능한 공개 진입점이 **자기 전제를 스스로 검사하는지** 고정한다.
 
-리컨실러(Task 13)는 요구사항 행의 잠금을 놓은 뒤에 엔진을 부른다 — 그 사이에
+리컨실러는 요구사항 행의 잠금을 놓은 뒤에 엔진을 부른다 — 그 사이에
 푸시가 도착해 상태가 먼저 움직일 수 있다. 그때 엔진이 맹목적으로 전이하면
 `IllegalTransition`이 터진다. 시스템은 다음 주기에 스스로 회복하지만, **공개
-계약이 거짓이면 다음 호출자(Task 12)에게는 함정**이다. 그래서 "전제가 어긋나면
+계약이 거짓이면 다음 호출자(재시도 정책 등)에게는 함정**이다. 그래서 "전제가 어긋나면
 아무 것도 하지 않고 돌아간다"를 계약으로 못 박는다.
 
 에이전트 클라이언트를 빈 dict로 넘긴다: 가드가 제대로 동작하면 디스패치까지
@@ -104,7 +104,7 @@ async def test_advance_transitions_when_premise_holds(session) -> None:
     [RequirementState.PLANNED, RequirementState.IMPLEMENTING, RequirementState.VERIFYING],
 )
 async def test_give_up_transitions_when_premise_holds(session, state) -> None:
-    """Task 12: 리컨실러가 캡을 넘겼다고 판단한 상태 그대로면 ESCALATED로 간다."""
+    """리컨실러가 캡을 넘겼다고 판단한 상태 그대로면 ESCALATED로 간다."""
     rid = f"REQ-G-giveup-{state.value}"
     db, maker, workflow = await _engine_over(rid, state, session)
     try:
@@ -117,7 +117,7 @@ async def test_give_up_transitions_when_premise_holds(session, state) -> None:
 
 
 async def test_give_up_records_agent_and_failure_class_in_the_event(session) -> None:
-    """리뷰 라운드 1: 운영자가 "누가·왜 포기됐는지"를 아웃박스에서 읽을 수 있어야 한다.
+    """운영자가 "누가·왜 포기됐는지"를 아웃박스에서 읽을 수 있어야 한다.
 
     `to == "escalated"`만으로는 회차 상한 초과(`remediate`)와 재시도 예산 소진
     (`give_up`)을 구분할 수 없다 — `reason`·`agent`·`failure_class`를 같은
@@ -209,7 +209,7 @@ class _GatedEngine(WorkflowEngine):
 async def test_remediate_does_not_dispatch_when_it_loses_the_transition(session) -> None:
     """경쟁에서 진 `remediate`는 dev를 **디스패치하지 않는다**.
 
-    원장의 옛 논거("진 호출자는 `IllegalTransition`으로 죽는다")는 거짓이다 —
+    예전 설명("진 호출자는 `IllegalTransition`으로 죽는다")는 거짓이다 —
     `(IMPLEMENTING, DEV_DONE) → VERIFYING`은 전이 표에 있는 **합법** 전이라
     진 호출자는 죽지 않고 한 칸 더 간다. 그러면 revision R+1에 dev 행 2개,
     검증자 행 0개, 상태 `verifying`이 남는다: 아무도 그 두 번째 dev를

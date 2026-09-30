@@ -40,7 +40,7 @@ IDEMPOTENCY_METADATA_KEY = "vsi_idempotency_key"
 class TaskSnapshot:
     """에이전트가 보고하는 Task의 현재 모습(오케스트레이터 어휘로 정규화).
 
-    푸시 콜백과 리컨실리에이션(Task 13)이 같은 타입을 보게 해서, 완료 처리 경로가
+    푸시 콜백과 리컨실리에이션이 같은 타입을 보게 해서, 완료 처리 경로가
     "어떻게 알게 됐는가"에 따라 갈라지지 않도록 한다.
     """
 
@@ -142,7 +142,7 @@ class AgentClient:
         """에이전트가 보관 중인 Task를 읽어 정규화한 스냅샷으로 돌려준다.
 
         푸시는 최선 노력 전달이다 — 이 조회가 권위 있는 읽기이고, 디스패치 직후
-        경합 구간과 Task 13의 리컨실리에이션이 모두 여기에 기댄다.
+        경합 구간과 리컨실리에이션이 모두 여기에 기댄다.
         """
         client = await self._ensure_client()
         task = await client.get_task(GetTaskRequest(id=a2a_task_id))

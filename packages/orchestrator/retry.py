@@ -44,7 +44,7 @@ def classify(exc: Exception) -> FailureClass:
     - `httpx.HTTPStatusError`: 4xx는 클라이언트가 보낸 요청 자체가 문제(POISON),
       5xx는 상대가 일시적으로 응답하지 못한 것(TRANSPORT)으로 본다.
     - 연결·타임아웃·네트워크 오류는 TRANSPORT. 엔진이 개별 submit 시도를
-      `TimeoutConfig.tool_s`로 감싸므로(Task 12), `asyncio.wait_for`가 던지는
+      `TimeoutConfig.tool_s`로 감싸므로, `asyncio.wait_for`가 던지는
       내장 `TimeoutError`도 같은 층으로 취급한다.
     - 스키마·타입 문제(`ValueError`/`TypeError`/`KeyError`)는 입력 자체가
       잘못됐다는 신호라 POISON.
@@ -66,7 +66,7 @@ def classify(exc: Exception) -> FailureClass:
 def is_undelivered(exc: Exception) -> bool:
     """이 예외가 **요청이 상대에게 닿지 않았다는 것을 증명하는가**.
 
-    Task 12 수정: `dispatch_agent`의 제자리 재시도(같은 행, 같은 멱등성 키)는
+    `dispatch_agent`의 제자리 재시도(같은 행, 같은 멱등성 키)는
     상대가 이전 요청을 이미 받았을 가능성이 0일 때만 안전하다. 연결 자체가
     거부됐거나(포트가 안 열려 있다) TCP 연결 수립 자체가 타임아웃났다면
     바이트 하나도 나가지 않았다는 뜻이라 그 자리에서 다시 보내도 에이전트

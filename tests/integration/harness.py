@@ -11,7 +11,7 @@ compose로 기동된 스택(오케스트레이터 + 스텁 에이전트 4종 + p
 2. **시나리오는 컨테이너 재기동으로 주입한다.** `AgentScenario`는 에이전트
    프로세스 안에 사는 상태 기계(verdict 커서·호출 카운터)라, 시나리오를 바꾸려면
    프로세스를 새로 띄우는 수밖에 없다. 같은 시나리오를 다시 돌릴 때도 강제
-   재생성해 카운터를 0으로 되돌린다 — Task 11/12의 환류·재시도 시나리오는 이
+   재생성해 카운터를 0으로 되돌린다 — 환류·재시도 시나리오는 이
    카운터에 결과가 좌우되므로, 빠름보다 결정성을 택한다.
 """
 
@@ -63,7 +63,7 @@ class ScenarioResult:
     revision: int
     task_count: int
     events: list
-    tasks: list  # Task 11·12가 revision_of / attempt / 멱등성 키를 본다
+    tasks: list  # 환류·재시도 시험이 revision_of / attempt / 멱등성 키를 본다
     artifacts: list
 
 
@@ -188,7 +188,7 @@ async def _purge(maker: async_sessionmaker, requirement_id: str) -> None:
 async def _purge_abandoned(maker: async_sessionmaker, keep: str) -> None:
     """이전 실행이 남긴 **비종료** 요구사항을 전부 지운다.
 
-    Task 13의 리컨실러가 오케스트레이터 안에서 상시로 도는 순간부터, 죽은 채 남은
+    리컨실러가 오케스트레이터 안에서 상시로 도는 이상, 죽은 채 남은
     비종료 요구사항은 영원한 재디스패치 대상이 된다 — 스텁 에이전트의 호출 카운터와
     verdict 커서를 소모해 **다음 시나리오의 결정성을 깨뜨린다**. 실행 직전에
     청소하는 것이 테스트 층의 책임이다(운영 코드는 그 행들을 정당하게 복구한다).
@@ -316,7 +316,7 @@ async def run_scenario(
 
     청소가 **에이전트 재기동보다 먼저**인 것이 중요하다. 재기동은 수 초가 걸리는데,
     그 사이 DB에는 같은 `requirement_id`의 지난 실행 결과가 그대로 남아 있다.
-    Task 13의 SIGKILL 테스트처럼 이 코루틴과 **동시에** DB를 관찰하는 쪽이 있으면
+    리컨실리에이션 SIGKILL 테스트처럼 이 코루틴과 **동시에** DB를 관찰하는 쪽이 있으면
     지난 실행의 행(이미 accepted)을 이번 실행으로 착각한다(실측: kill 시점 술어가
     즉시 참이 되어 테스트가 공회전했다).
     """

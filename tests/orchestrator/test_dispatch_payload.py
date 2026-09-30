@@ -75,7 +75,7 @@ async def test_dispatch_agent_sends_real_verifier_feedback_from_previous_revisio
     session,
 ) -> None:
     """`build_feedback`이 옳아도 `dispatch_agent`가 실제 DB에서 그 입력을 올바르게
-    조립하지 못하면 소용없다 — 리뷰 라운드 1: 잘못된 컬럼이나 뒤바뀐 dict 키는
+    조립하지 못하면 소용없다 — 잘못된 컬럼이나 뒤바뀐 dict 키는
     이 경로를 지나지 않으면 어떤 테스트도 못 잡는다. `Artifact.content`는
     `loop.py`가 검증자 결과로 실제로 만드는 모양 그대로 심는다.
     """

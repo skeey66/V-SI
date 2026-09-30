@@ -1,10 +1,10 @@
-"""`dispatch_agent`의 `submit()`-실패 경로에 재시도 정책(Task 12)을 고정한다.
+"""`dispatch_agent`의 `submit()`-실패 경로에 재시도 정책을 고정한다.
 
 여기서 시험하는 것은 **에이전트 실행 자체가 아니라 제출 왕복이 터지는 경우**다
-(연결 거부, 5xx, 스키마 오류 등) — Task 13이 다루는 "제출은 됐는데 executor가
+(연결 거부, 5xx, 스키마 오류 등) — 리컨실리에이션이 다루는 "제출은 됐는데 executor가
 크래시해 푸시가 안 오는" 경로(리컨실러의 PROBE)와는 다른 층이다.
 
-리뷰 라운드 1: 제자리 재시도(같은 행·같은 멱등성 키)는 **요청이 상대에게 닿지
+제자리 재시도(같은 행·같은 멱등성 키)는 **요청이 상대에게 닿지
 않았다는 것이 예외로 증명될 때만** 안전하다(연결 거부·연결 타임아웃 —
 `retry.is_undelivered`). 5xx나 읽기 타임아웃처럼 상대가 이미 요청을 받았을
 수 있는 모호한 실패는 제자리 재시도하지 않는다 — 그 자리에서 또 보내면
@@ -131,7 +131,7 @@ async def test_poison_submit_failure_is_not_retried(session) -> None:
 async def test_undelivered_submit_failure_retries_in_place_then_succeeds(session) -> None:
     """연결 거부(전달이 안 됐다는 것이 증명됨)는 같은 행·같은 키로 제자리 재시도한다.
 
-    리뷰 라운드 1: 전에는 5xx로 이 경로를 시험했지만, 5xx는 상대가 요청을 이미
+    5xx로는 이 경로를 시험하지 않는다 — 5xx는 상대가 요청을 이미
     받고 나서 실패했을 수 있어(모호함) 제자리 재시도 대상이 아니다. 제자리
     재시도는 "전달 안 됨이 증명된" 실패(연결 거부·연결 타임아웃)에만 쓴다.
     """
@@ -169,7 +169,7 @@ async def test_undelivered_submit_failure_gives_up_after_max_attempts(session) -
 
 
 async def test_ambiguous_submit_failure_is_not_retried_in_place(session) -> None:
-    """리뷰 라운드 1 수정: 5xx처럼 전달 여부가 모호한 실패는 제자리 재시도하지 않는다.
+    """5xx처럼 전달 여부가 모호한 실패는 제자리 재시도하지 않는다.
 
     상대가 이미 요청을 받았을 수 있으므로, 같은 키로 또 보내면 에이전트 쪽에
     Task가 두 번 생길 위험이 있다(첫 Task는 고아가 되고 그 완료 푸시는 상관시킬

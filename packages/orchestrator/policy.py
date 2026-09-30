@@ -12,7 +12,7 @@
 | `tool_s` | 30초 | **집행됨.** 에이전트로 나가는 왕복 하나를 `asyncio.wait_for`로 감싼다 (`engine.dispatch_agent`의 `submit`, `engine.refresh_task`의 `get_task`). |
 | `executor_s` | 5분 | **집행됨.** 공유 httpx 클라이언트의 요청당 타임아웃 (`orchestrator/main.py`). `tool_s`가 먼저 끊으므로 실질적으로는 backstop이다. |
 | `step_s` | 15분 | 워크플로 단계 예산. SP1에서 한 단계는 스텁이라 초 단위로 끝나고, 멈춘 단계는 리컨실러의 `stuck_after_s` 천장이 끊는다 — 그래서 이 값에 걸릴 일이 없다. |
-| `run_s` | 60분 | **집행됨.** 리컨실러가 요구사항 나이로 검사한다 (`reconciler.next_action`, Task 11). |
+| `run_s` | 60분 | **집행됨.** 리컨실러가 요구사항 나이로 검사한다 (`reconciler.next_action`). |
 
 `step_s`를 아직 배선하지 않은 이유는 SP1의 종료 보장이 이미 **다른 축**에
 서 있기 때문이다: 열린 행의 나이 천장(`stuck_after_s`)과 실패 행 수의 재시도

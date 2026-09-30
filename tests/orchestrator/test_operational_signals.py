@@ -1,6 +1,7 @@
 """운영 신호 세 개가 **실제로 방출되는지** 고정한다.
 
-Task 14가 넣은 세 신호는 지금까지 Jaeger를 손으로 열어야만 확인할 수 있었다.
+OTel 계측이 넣은 세 신호는 이 테스트 없이는 Jaeger를 손으로 열어야만 확인할 수
+있다.
 그런데 이 셋은 장식이 아니라 **측정 도구**다:
 
 - `vsi.probe.repetition` — 같은 행을 몇 번째 PROBE하는가. a2a-sdk 1.1.2의 종료
@@ -17,7 +18,7 @@ Task 14가 넣은 세 신호는 지금까지 Jaeger를 손으로 열어야만 �
 **전역 TracerProvider를 건드리지 않는다.** `trace.set_tracer_provider`는 한 번만
 먹히므로(두 번째부터는 경고만 남기고 무시된다) 여기서 전역을 세우면 실행 순서에
 따라 `tests/agent_runtime/test_telemetry.py`가 자기 provider를 못 심고 조용히
-깨진다(리뷰 라운드 1에서 실측된 사고와 같은 종류다). 대신 리컨실러 모듈의
+깨진다(실제로 겪은 사고와 같은 종류다). 대신 리컨실러 모듈의
 `tracer`만 갈아 끼운다 — 엔진의 `trace.get_current_span()`은 그 tracer가 연
 span을 컨텍스트에서 그대로 집어 오므로 전역과 무관하게 동작한다.
 """
@@ -190,7 +191,7 @@ async def test_transition_skip_emits_a_counting_event(spans, session) -> None:
         await db.dispose()
 
 
-# ------------------------------------------------ Task 11 리뷰 라운드 1 회귀
+# ------------------------------------------------ run_s backstop 회귀
 
 
 async def test_give_up_with_no_tasks_still_escalates_the_requirement(session) -> None:
@@ -199,7 +200,7 @@ async def test_give_up_with_no_tasks_still_escalates_the_requirement(session) ->
     처음 구현은 `Action(GIVE_UP)`을 `tasks=()`인 채로 돌려줬고, `_execute`의
     GIVE_UP 분기는 `for task in action.tasks: ... engine.give_up(...)`뿐이었다
     — 빈 튜플이면 루프 본문이 한 번도 안 돌아 `engine.give_up`이 전혀
-    불리지 않는다(리뷰가 실측: 호출 0회). 그러면 리컨실러는 매 주기 "→
+    불리지 않는다(실측: 호출 0회). 그러면 리컨실러는 매 주기 "→
     give_up"을 로그로 남기면서도 요구사항을 영원히 ACTIVE에 방치한다 — 이
     파일의 다른 테스트들처럼 `next_action`이 돌려준 kind만 보면 이 회귀를
     잡지 못한다(의도는 맞고 집행이 없었다). 네 ACTIVE 상태 전부에서
@@ -240,7 +241,7 @@ async def test_give_up_with_no_tasks_still_escalates_the_requirement(session) ->
 async def test_run_budget_end_to_end_escalates_remediating_with_zero_open_rows(
     session,
 ) -> None:
-    """리뷰가 지목한 정확한 시나리오 — `remediate` 중간에 죽어 이번 회차 Task가
+    """실제로 문제가 된 시나리오 — `remediate` 중간에 죽어 이번 회차 Task가
     0개인 REMEDIATING 요구사항이 `run_s`를 넘겼을 때, `next_action`부터
     `Reconciler.reconcile_once`까지 전체 경로가 실제로 요구사항을 ESCALATED로
     끝내는지 본다(단위 함수 하나가 아니라 배선 전체를 실제 DB로 검증한다).
