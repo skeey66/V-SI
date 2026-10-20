@@ -118,3 +118,39 @@ def test_judge_missing_verdict_is_not_accepted():
     out = judge({"verdicts": {"qa": {"agent": "qa", "verdict": "PASS", "exit_code": 0, "summary": ""}},
                  "revision": 1, "max_revisions": 3})
     assert out["status"] == "remediating"
+
+
+async def test_security_failure_attaches_retrieved_guide_to_feedback():
+    from dataclasses import replace
+
+    queries = []
+
+    async def fake_retriever(query, k):
+        queries.append(query)
+        return [{"id": "B602", "title": "shell=True", "score": 1.0, "text": "shell=True 를 빼라"}]
+
+    llm = make_llm()
+    tools = FakeTools({"check_acceptance_tests": [0], "run_tests": [0], "run_security_scan": [1, 0]})
+    deps = replace(deps_with(tools, llm), knowledge=fake_retriever)
+    final = await build_graph(deps).ainvoke(initial_state("REQ-6", "x"), CFG)
+    assert final["status"] == "accepted" and final["revision"] == 2
+    assert len(queries) == 1
+    dev_prompt = [p for p in llm.prompts if p.startswith("요구사항:") and "반려" in p][0]
+    assert "shell=True 를 빼라" in dev_prompt
+
+
+async def test_rag_disabled_skips_retrieval():
+    from dataclasses import replace
+
+    from lg_agent.options import RuntimeOptions
+
+    called = []
+
+    async def fake_retriever(query, k):
+        called.append(query)
+        return []
+
+    tools = FakeTools({"check_acceptance_tests": [0], "run_tests": [0], "run_security_scan": [1, 0]})
+    deps = replace(deps_with(tools), knowledge=fake_retriever, options=RuntimeOptions(rag_enabled=False))
+    await build_graph(deps).ainvoke(initial_state("REQ-7", "x"), CFG)
+    assert called == []

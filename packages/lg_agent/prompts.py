@@ -25,3 +25,42 @@ PLANNER_SYSTEM = (
     "- 표준 라이브러리만 쓴다.\n"
     "- 두 파일을 다 쓰면 짧게 무엇을 썼는지 답하고 끝내라. 테스트는 시스템이 직접 검사한다."
 )
+
+
+#: Prompt Hub 에 올릴 때 쓰는 이름
+PLANNER_PROMPT_NAME = "vsi-planner"
+
+
+class PromptStore:
+    """기획 프롬프트의 현재 버전을 고른다.
+
+    기본은 위의 로컬 문자열이다. 관리자가 LangSmith Prompt Hub 의 특정 커밋을
+    활성화하면 그 버전을 쓴다 — 재배포 없이 프롬프트를 바꾸고, 어느 실행이 어느
+    버전을 썼는지는 트레이스 메타데이터(`prompt_commit`)로 남는다.
+
+    Hub 를 읽지 못하면(네트워크·키 문제) 로컬 기본값으로 돌아간다. 프롬프트
+    저장소 장애가 요구사항 처리를 막으면 안 된다.
+    """
+
+    def __init__(self, client=None) -> None:
+        self._client = client
+        self.active_commit: str | None = None
+        self._cache: dict[str, str] = {}
+
+    def planner_system(self) -> str:
+        commit = self.active_commit
+        if not commit:
+            return PLANNER_SYSTEM
+        return self.template_of(commit) or PLANNER_SYSTEM
+
+    def template_of(self, commit: str) -> str | None:
+        """Hub 의 특정 커밋 본문. 커밋은 바뀌지 않으므로 한 번 읽으면 캐시한다."""
+        if self._client is None:
+            return None
+        if commit not in self._cache:
+            try:
+                prompt = self._client.pull_prompt(f"{PLANNER_PROMPT_NAME}:{commit}")
+                self._cache[commit] = prompt.messages[0].prompt.template
+            except Exception:
+                return None
+        return self._cache[commit]

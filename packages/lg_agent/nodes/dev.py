@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from lg_agent.deps import Deps
+from lg_agent.events import emit
 from lg_agent.nodes.common import run_agent
 from lg_agent.state import VsiState
 from llm_agent.roles import ROLES, system_prompt, task_prompt
@@ -10,6 +11,7 @@ from llm_agent.roles import ROLES, system_prompt, task_prompt
 def make_dev(deps: Deps):
     async def dev(state: VsiState) -> dict:
         revision = state.get("revision", 1)
+        emit({"type": "agent_start", "agent": "dev", "revision": revision})
         async with deps.tools("dev", state["requirement_id"]) as rt:
             summary = await run_agent(
                 deps, name="dev",

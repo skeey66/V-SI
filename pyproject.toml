@@ -34,6 +34,8 @@ dependencies = [
   "psycopg[binary]>=3.2",
   "langsmith>=0.14",
   "python-dotenv>=1.0",
+  "faiss-cpu>=1.9",
+  "numpy>=1.26",
 ]
 
 [project.optional-dependencies]

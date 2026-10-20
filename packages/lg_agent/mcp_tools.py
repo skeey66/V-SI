@@ -24,10 +24,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool
-from langgraph.config import get_stream_writer
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from lg_agent.events import emit
 from llm_agent.mcp_client import ToolBridge, ToolNotAllowed, tool_schemas
 from llm_agent.roles import ROLES
 
@@ -35,18 +35,6 @@ MCP_CONNECT_TIMEOUT_S = 30.0
 #: 도구 호출 하나의 상한. 도구 서버의 서브프로세스 상한(60초)에 왕복 여유를 더했다
 #: (`llm_agent/loop.py` 의 `TOOL_CALL_CAP_S` 와 같은 근거).
 TOOL_CALL_CAP_S = 90.0
-
-
-def _emit(event: dict) -> None:
-    """그래프 실행 중이면 `custom` 스트림으로 도구 이벤트를 흘린다.
-
-    그래프 밖(단위 테스트 등)에서 부르면 writer 가 없으므로 조용히 넘어간다.
-    """
-    try:
-        writer = get_stream_writer()
-    except RuntimeError:
-        return
-    writer(event)
 
 
 @dataclass
@@ -61,7 +49,7 @@ class RoleTools:
 
 
 async def _safe_call(role: str, bridge: ToolBridge, name: str, arguments: dict) -> dict:
-    _emit({"type": "tool_call", "agent": role, "tool": name, "args": arguments})
+    emit({"type": "tool_call", "agent": role, "tool": name, "args": arguments})
     try:
         result = await asyncio.wait_for(bridge.call(name, arguments), timeout=TOOL_CALL_CAP_S)
     except ToolNotAllowed as exc:
@@ -70,7 +58,7 @@ async def _safe_call(role: str, bridge: ToolBridge, name: str, arguments: dict) 
         result = {"ok": False, "detail": f"'{name}' 호출이 {TOOL_CALL_CAP_S}초 안에 끝나지 않았다"}
     except Exception as exc:  # 끊긴 세션·네트워크 오류도 모델이 읽을 메시지로
         result = {"ok": False, "detail": f"'{name}' 호출이 예외로 끝났다: {exc}"}
-    _emit({
+    emit({
         "type": "tool_result", "agent": role, "tool": name,
         "ok": result.get("ok"), "exit_code": result.get("exit_code"),
     })

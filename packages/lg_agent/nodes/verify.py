@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 from lg_agent.deps import Deps
+from lg_agent.events import emit
+from lg_agent.knowledge import bandit_query
 from lg_agent.nodes.common import run_agent
 from lg_agent.state import Verdict, VsiState
 from llm_agent.roles import ROLES, system_prompt
@@ -29,6 +31,7 @@ def make_verifier(deps: Deps, role: str):
     assert verdict_tool is not None, f"{role} 는 판정 도구가 없다"
 
     async def verify(state: VsiState) -> dict:
+        emit({"type": "agent_start", "agent": role, "revision": state.get("revision", 1)})
         async with deps.tools(role, state["requirement_id"]) as rt:
             result = await rt.call(verdict_tool)
             exit_code = result.get("exit_code")
@@ -36,16 +39,21 @@ def make_verifier(deps: Deps, role: str):
             if passed:
                 summary = "통과"
             else:
+                detail = result.get("detail", "")
+                guides = await _retrieve_guides(deps, role, detail)
                 read_only = [t for t in rt.tools if t.name != verdict_tool]
-                summary = await run_agent(
-                    deps, name=role,
-                    system_prompt=system_prompt(ROLES[role]),
-                    user_prompt=_EXPLAIN.format(
-                        tool=verdict_tool, code=exit_code,
-                        title=state["title"], detail=result.get("detail", ""),
-                    ),
-                    tools=read_only,
+                prompt = _EXPLAIN.format(
+                    tool=verdict_tool, code=exit_code, title=state["title"], detail=detail,
                 )
+                if guides:
+                    prompt += "\n\n--- 사내 보안 조치 가이드 (이 방법대로 고치라고 안내해라) ---\n" + guides
+                summary = await run_agent(
+                    deps, name=role, system_prompt=system_prompt(ROLES[role]),
+                    user_prompt=prompt, tools=read_only,
+                )
+                if guides:
+                    # 모델이 요약하며 빠뜨려도 개발이 가이드 원문을 받도록 그대로 붙인다.
+                    summary += "\n\n[조치 가이드]\n" + guides
         verdict: Verdict = {
             "agent": role, "verdict": "PASS" if passed else "FAIL",
             "exit_code": exit_code, "summary": summary,
@@ -57,3 +65,23 @@ def make_verifier(deps: Deps, role: str):
 
     verify.__name__ = role
     return verify
+
+
+async def _retrieve_guides(deps: Deps, role: str, detail: str) -> str:
+    """보안 FAIL 일 때 bandit 출력으로 조치 가이드를 검색한다 (RAG).
+
+    검색 실패는 판정에 영향을 주지 않는다 — 가이드 없이 기존처럼 설명만 한다.
+    """
+    if role != "security" or deps.knowledge is None or not deps.options.rag_enabled:
+        return ""
+    query = bandit_query(detail)
+    try:
+        hits = await deps.knowledge(query, 3)
+    except Exception as exc:
+        emit({"type": "rag", "agent": role, "query": query, "hits": [], "error": str(exc)})
+        return ""
+    emit({
+        "type": "rag", "agent": role, "query": query,
+        "hits": [{"id": h["id"], "title": h["title"], "score": h["score"]} for h in hits],
+    })
+    return "\n\n".join(h["text"] for h in hits)

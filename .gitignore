@@ -30,3 +30,4 @@ build/
 # git filter-branch 임시 산출물
 .git-rewrite/
 .workspaces/
+services/knowledge_server/.cache/

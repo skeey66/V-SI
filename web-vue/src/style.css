@@ -1,0 +1,81 @@
+/* 전체 공통 스타일 (라이트 테마) */
+:root {
+  --bg: #f5f6f8;
+  --card: #ffffff;
+  --text: #1f2430;
+  --muted: #6b7280;
+  --border: #e3e6eb;
+  --primary: #2f6fed;
+  --primary-weak: #e8efff;
+  --ok: #1f9d55;
+  --ok-weak: #e3f6eb;
+  --fail: #d64545;
+  --fail-weak: #fdeaea;
+  --warn: #c97a00;
+  --warn-weak: #fff3dc;
+  --radius: 8px;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
+  font-size: 14px;
+}
+a { color: var(--primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3 { margin: 0 0 12px; }
+h2 { font-size: 16px; }
+
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 24px; background: var(--card); border-bottom: 1px solid var(--border);
+}
+.topbar .brand { font-weight: 700; font-size: 18px; color: var(--text); }
+.topbar .brand small { font-weight: 400; color: var(--muted); font-size: 13px; }
+.topbar nav a { margin-left: 16px; color: var(--muted); }
+.topbar nav a.router-link-exact-active { color: var(--primary); font-weight: 600; }
+
+.container { max-width: 1280px; margin: 0 auto; padding: 20px 24px 60px; }
+
+.card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px; margin-bottom: 16px;
+}
+
+button {
+  font: inherit; cursor: pointer; padding: 6px 12px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text);
+}
+button:hover:not(:disabled) { border-color: var(--primary); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+button.danger { color: var(--fail); border-color: var(--fail); }
+button.small { padding: 2px 8px; font-size: 12px; }
+
+textarea, input[type='text'], input[type='number'] {
+  font: inherit; width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px;
+}
+textarea { resize: vertical; }
+
+pre, code { font-family: var(--mono); font-size: 12px; }
+pre {
+  background: #f8f9fb; border: 1px solid var(--border); border-radius: 6px;
+  padding: 10px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 0;
+}
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+
+.muted { color: var(--muted); }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.error-box {
+  background: var(--fail-weak); color: var(--fail); border: 1px solid var(--fail);
+  border-radius: 6px; padding: 8px 12px; margin-bottom: 12px;
+}
+.pass { color: var(--ok); font-weight: 600; }
+.fail { color: var(--fail); font-weight: 600; }

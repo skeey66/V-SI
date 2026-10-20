@@ -36,6 +36,8 @@ class Settings:
     max_turns: int
     max_output_tokens: int
     checkpoint_url: str | None
+    rag_enabled: bool
+    knowledge_url: str
     langsmith_project: str
     tracing: bool
 
@@ -62,6 +64,8 @@ def load_settings(env_file: Path | None = None) -> Settings:
         max_turns=int(os.environ.get("VSI_LG_MAX_TURNS", "8")),
         max_output_tokens=int(os.environ.get("VSI_LG_MAX_OUTPUT_TOKENS", "2000")),
         checkpoint_url=os.environ.get("VSI_LG_CHECKPOINT_URL") or None,
+        rag_enabled=os.environ.get("VSI_LG_RAG", "on").lower() not in ("off", "0", "false"),
+        knowledge_url=os.environ.get("VSI_KNOWLEDGE_URL", "http://localhost:8011").rstrip("/"),
         langsmith_project=project,
         tracing=tracing,
     )

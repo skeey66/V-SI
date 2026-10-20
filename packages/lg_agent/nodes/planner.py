@@ -10,18 +10,20 @@ from __future__ import annotations
 from langgraph.types import interrupt
 
 from lg_agent.deps import Deps
+from lg_agent.events import emit
 from lg_agent.nodes.common import run_agent
 from lg_agent.state import VsiState
-from lg_agent.prompts import PLANNER_SYSTEM, PLANNER_TOOLS
+from lg_agent.prompts import PLANNER_TOOLS
 from llm_agent.roles import task_prompt
 
 
 def make_planner(deps: Deps):
     async def planner(state: VsiState) -> dict:
+        emit({"type": "agent_start", "agent": "planner", "revision": 0})
         async with deps.tools("planner", state["requirement_id"]) as rt:
             summary = await run_agent(
                 deps, name="planner",
-                system_prompt=PLANNER_SYSTEM,
+                system_prompt=deps.prompts.planner_system(),
                 user_prompt=task_prompt(state["title"], 1, []),
                 tools=[t for t in rt.tools if t.name in PLANNER_TOOLS],
             )
