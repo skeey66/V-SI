@@ -158,7 +158,8 @@ services:
     command: ["uvicorn", "knowledge_server.main:app", "--host", "0.0.0.0", "--port", "8000"]
     env_file: [.env]
     # 질의 임베딩에 OpenAI 를 불러야 하므로 internal 망이 아니라 기본 망에 둔다.
-    ports: ["8011:8000"]
+    # 127.0.0.1 에만 연다 — 0.0.0.0 이면 같은 네트워크의 누구나 이 키로 임베딩을 부를 수 있다.
+    ports: ["127.0.0.1:8011:8000"]
 
   lg-api:
     profiles: [lg]
@@ -170,7 +171,9 @@ services:
       VSI_KNOWLEDGE_URL: http://knowledge:8000
       VSI_LG_CHECKPOINT_URL: postgresql://vsi:vsi@postgres:5432/vsi
     depends_on: [postgres, workspace, knowledge]
-    ports: ["8200:8000"]
+    # 127.0.0.1 에만 연다 — 열려 있으면 같은 와이파이의 누구나 요구사항을 넣어 OpenAI 한도를
+    # 쓰고, 관리자 API 로 Prompt Hub 에 프롬프트를 올릴 수 있다(인증이 없다).
+    ports: ["127.0.0.1:8200:8000"]
     # workspace(도구 서버)는 internal 망에만 있으므로 두 망에 모두 붙는다.
     networks: [internal, default]
 
@@ -183,7 +186,7 @@ services:
       VSI_API_URL: http://lg-api:8000
     command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
     depends_on: [lg-api]
-    ports: ["5180:5180"]
+    ports: ["127.0.0.1:5180:5180"]
 
 networks:
   default:

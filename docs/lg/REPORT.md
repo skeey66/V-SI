@@ -159,7 +159,9 @@ md5 로 되돌림 → 3회차 보안 FAIL` 로 판정이 번갈아 뒤집혔다.
 docker compose --profile lg up -d --build postgres workspace knowledge lg-api web-vue
 open http://localhost:5180
 
-# 로컬
+# 로컬 (개발용) — 주의: 도구 서버를 호스트에서 직접 띄우면 LLM 이 쓴 코드가 격리 없이
+# 내 컴퓨터에서 실행된다(.env 파일도 읽을 수 있는 위치). 시연·측정은 Docker 로 한다 —
+# Docker 의 workspace 컨테이너에는 키가 없고 인터넷도 없다.
 PYTHONPATH=packages:services VSI_WORKSPACE_BASE=$PWD/.workspaces \
   VSI_MCP_ALLOWED_HOSTS=localhost:8010,127.0.0.1:8010 uvicorn tool_server.main:app --port 8010 &
 PYTHONPATH=packages:services uvicorn knowledge_server.main:app --port 8011 &
@@ -169,6 +171,17 @@ cd web-vue && npm install && npm run dev        # http://localhost:5180
 # 시험 (실제 API 를 부르지 않는다)
 .venv/bin/python -m pytest tests/lg_agent tests/lg_api tests/knowledge_server
 ```
+
+### 키 보안 점검 결과 (2026-10-20)
+
+| 경로 | 결과 |
+|---|---|
+| Git 이력 (전 브랜치) | `.env` 미추적, 두 키 모두 0건 |
+| 작업 파일·Vue 빌드 결과물·로그 | 0건 |
+| Docker 이미지 | `.env` 없음 (Dockerfile 이 `packages`·`services`·`scenarios` 만 복사) |
+| 컨테이너 환경변수 | 키는 `lg-api`·`knowledge` 에만. **LLM 코드가 실행되는 `workspace` 에는 없음** |
+| LangSmith 트레이스 | 키 원문 0건. LangChain 이 키를 `{"type": "secret", "id": ["OPENAI_API_KEY"]}` 로 직렬화. 초기 401 오류 트레이스에 OpenAI 가 가린 형태(앞 8자·뒤 4자)만 남음 |
+| 포트 노출 | **수정함** — `lg-api`·`knowledge`·`web-vue` 를 `127.0.0.1` 에만 바인딩. 이전에는 같은 네트워크의 누구나 인증 없이 요청을 넣어 OpenAI 한도를 쓸 수 있었다 |
 
 `.env` 에 `OPENAI_API_KEY`(또는 `OPENAPI_APIKEY`)와 `LANGSMITH_API_KEY`(또는 `LANGSMITH_APIKEY`).
 
