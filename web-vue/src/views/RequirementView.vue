@@ -5,6 +5,7 @@ import { openEventStream } from '../api/sse.js'
 import { computeNodeStates } from '../utils/pipeline.js'
 import { AGENT_LABELS, TERMINAL, formatSeconds } from '../utils/format.js'
 import StatusBadge from '../components/StatusBadge.vue'
+import OfficeView from '../components/OfficeView.vue'
 import PipelineStrip from '../components/PipelineStrip.vue'
 import EventTimeline from '../components/EventTimeline.vue'
 import AgentOutput from '../components/AgentOutput.vue'
@@ -145,7 +146,8 @@ const verdictList = computed(() => Object.values(detail.value?.verdicts || {}))
     </div>
   </section>
 
-  <section class="card">
+  <section class="card office-card">
+    <OfficeView :events="events" :outputs="outputs" :finished="finished" />
     <PipelineStrip :states="nodeStates" />
   </section>
 
@@ -204,4 +206,5 @@ const verdictList = computed(() => Object.values(detail.value?.verdicts || {}))
 .verdict b { margin-right: 6px; }
 .verdict pre { margin-top: 4px; }
 @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
+.office-card { display: flex; flex-direction: column; gap: 16px; }
 </style>
