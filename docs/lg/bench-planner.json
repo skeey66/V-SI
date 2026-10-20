@@ -1,0 +1,161 @@
+{
+  "suite": "planner",
+  "model": "gpt-4o-mini",
+  "reps": 2,
+  "summary": {
+    "before": {
+      "runs": 6,
+      "accepted": 0,
+      "accept_rate": 0.0,
+      "avg_revisions": 3,
+      "avg_elapsed_s": 45.6,
+      "avg_tokens": 29451,
+      "avg_cost": 0.00563,
+      "total_cost": 0.0338
+    },
+    "after": {
+      "runs": 6,
+      "accepted": 6,
+      "accept_rate": 1.0,
+      "avg_revisions": 1.17,
+      "avg_elapsed_s": 12.1,
+      "avg_tokens": 5162,
+      "avg_cost": 0.00103,
+      "total_cost": 0.0062
+    }
+  },
+  "rows": [
+    {
+      "suite": "planner",
+      "variant": "before",
+      "title": "장바구니에 담긴 상품 금액을 모두 합치고, 합계가 5만원 이상이면 배송비 3000원을 빼주세요",
+      "requirement_id": "BENCH-planner-before-31377f",
+      "status": "escalated",
+      "revision": 3,
+      "elapsed_s": 44.4,
+      "tokens": 26255,
+      "cost": 0.005135
+    },
+    {
+      "suite": "planner",
+      "variant": "before",
+      "title": "장바구니에 담긴 상품 금액을 모두 합치고, 합계가 5만원 이상이면 배송비 3000원을 빼주세요",
+      "requirement_id": "BENCH-planner-before-053c5c",
+      "status": "escalated",
+      "revision": 3,
+      "elapsed_s": 41.2,
+      "tokens": 25727,
+      "cost": 0.004988
+    },
+    {
+      "suite": "planner",
+      "variant": "before",
+      "title": "문자열이 회문인지 판별하는 함수 (대소문자와 공백은 무시)",
+      "requirement_id": "BENCH-planner-before-15aa7b",
+      "status": "escalated",
+      "revision": 3,
+      "elapsed_s": 41.6,
+      "tokens": 22522,
+      "cost": 0.004259
+    },
+    {
+      "suite": "planner",
+      "variant": "before",
+      "title": "문자열이 회문인지 판별하는 함수 (대소문자와 공백은 무시)",
+      "requirement_id": "BENCH-planner-before-e22520",
+      "status": "escalated",
+      "revision": 3,
+      "elapsed_s": 51.8,
+      "tokens": 36448,
+      "cost": 0.0069
+    },
+    {
+      "suite": "planner",
+      "variant": "before",
+      "title": "정수 리스트에서 두 번째로 큰 값을 돌려주는 함수, 값이 부족하면 None",
+      "requirement_id": "BENCH-planner-before-9711e7",
+      "status": "escalated",
+      "revision": 3,
+      "elapsed_s": 44.1,
+      "tokens": 27038,
+      "cost": 0.005088
+    },
+    {
+      "suite": "planner",
+      "variant": "before",
+      "title": "정수 리스트에서 두 번째로 큰 값을 돌려주는 함수, 값이 부족하면 None",
+      "requirement_id": "BENCH-planner-before-e07288",
+      "status": "escalated",
+      "revision": 3,
+      "elapsed_s": 50.6,
+      "tokens": 38717,
+      "cost": 0.007385
+    },
+    {
+      "suite": "planner",
+      "variant": "after",
+      "title": "장바구니에 담긴 상품 금액을 모두 합치고, 합계가 5만원 이상이면 배송비 3000원을 빼주세요",
+      "requirement_id": "BENCH-planner-after-442435",
+      "status": "accepted",
+      "revision": 1,
+      "elapsed_s": 11.2,
+      "tokens": 4160,
+      "cost": 0.000837
+    },
+    {
+      "suite": "planner",
+      "variant": "after",
+      "title": "장바구니에 담긴 상품 금액을 모두 합치고, 합계가 5만원 이상이면 배송비 3000원을 빼주세요",
+      "requirement_id": "BENCH-planner-after-c76d74",
+      "status": "accepted",
+      "revision": 1,
+      "elapsed_s": 9.5,
+      "tokens": 4155,
+      "cost": 0.000834
+    },
+    {
+      "suite": "planner",
+      "variant": "after",
+      "title": "문자열이 회문인지 판별하는 함수 (대소문자와 공백은 무시)",
+      "requirement_id": "BENCH-planner-after-20744b",
+      "status": "accepted",
+      "revision": 1,
+      "elapsed_s": 9.7,
+      "tokens": 4143,
+      "cost": 0.000828
+    },
+    {
+      "suite": "planner",
+      "variant": "after",
+      "title": "문자열이 회문인지 판별하는 함수 (대소문자와 공백은 무시)",
+      "requirement_id": "BENCH-planner-after-2cb700",
+      "status": "accepted",
+      "revision": 2,
+      "elapsed_s": 20.1,
+      "tokens": 9571,
+      "cost": 0.001859
+    },
+    {
+      "suite": "planner",
+      "variant": "after",
+      "title": "정수 리스트에서 두 번째로 큰 값을 돌려주는 함수, 값이 부족하면 None",
+      "requirement_id": "BENCH-planner-after-d7c3a6",
+      "status": "accepted",
+      "revision": 1,
+      "elapsed_s": 11.3,
+      "tokens": 4505,
+      "cost": 0.000906
+    },
+    {
+      "suite": "planner",
+      "variant": "after",
+      "title": "정수 리스트에서 두 번째로 큰 값을 돌려주는 함수, 값이 부족하면 None",
+      "requirement_id": "BENCH-planner-after-37cf73",
+      "status": "accepted",
+      "revision": 1,
+      "elapsed_s": 10.5,
+      "tokens": 4439,
+      "cost": 0.000903
+    }
+  ]
+}

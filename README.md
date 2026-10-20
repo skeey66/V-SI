@@ -116,6 +116,20 @@ docker compose up -d --build
 `scenarios/` 의 대본을 바꾸면 QA 가 두 번 반려하는 경우, 개발이 크래시하는 경우,
 기획이 쓸모없는 테스트를 내는 경우를 결정적으로 재현할 수 있다.
 
+## LangGraph 경로 (미니프로젝트)
+
+같은 협업 흐름을 **LangGraph** 로 다시 구현한 경로가 함께 들어 있다. 기존 A2A 경로는
+비교군으로 그대로 둔다.
+
+```bash
+docker compose --profile lg up -d --build postgres workspace knowledge lg-api web-vue
+open http://localhost:5180      # 요청 · 실시간 진행(SSE) · 결과물 · 관리자(LangSmith)
+```
+
+- 그래프 `packages/lg_agent/` · API `packages/lg_api/` · RAG 지식 MCP 서버 `services/knowledge_server/` · 화면 `web-vue/`
+- 결과 보고서(Before/After 실측·트레이드오프): [`docs/lg/REPORT.md`](docs/lg/REPORT.md)
+- API 계약: [`docs/lg/api-contract.md`](docs/lg/api-contract.md)
+
 ## 화면
 
 | 탭 | 무엇을 보여 주나 |

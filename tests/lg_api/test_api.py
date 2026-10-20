@@ -98,3 +98,11 @@ async def test_config_patch_changes_runtime_options(client):
     resp = await client.put("/api/admin/config", json={"rag_enabled": False, "max_revisions": 2})
     assert resp.json()["rag_enabled"] is False and resp.json()["max_revisions"] == 2
     assert (await client.put("/api/admin/config", json={"max_revisions": 9})).status_code == 422
+
+
+async def test_resume_rejects_finished_and_unknown_runs(client):
+    _setup({"check_acceptance_tests": [0], "run_tests": [0], "run_security_scan": [0]})
+    rid = (await client.post("/api/requirements", json={"title": "x 함수"})).json()["requirement_id"]
+    await asyncio.wait_for(app.state.runs.get(rid).task, 10)
+    assert (await client.post(f"/api/requirements/{rid}/resume")).status_code == 409
+    assert (await client.post("/api/requirements/REQ-NOPE/resume")).status_code == 404

@@ -14,18 +14,19 @@ from lg_agent.events import emit
 from lg_agent.nodes.common import run_agent
 from lg_agent.state import VsiState
 from lg_agent.prompts import PLANNER_TOOLS
-from llm_agent.roles import task_prompt
+from llm_agent.roles import ROLES, system_prompt, task_prompt
 
 
 def make_planner(deps: Deps):
     async def planner(state: VsiState) -> dict:
         emit({"type": "agent_start", "agent": "planner", "revision": 0})
+        legacy = deps.options.planner_variant == "legacy"
         async with deps.tools("planner", state["requirement_id"]) as rt:
             summary = await run_agent(
                 deps, name="planner",
-                system_prompt=deps.prompts.planner_system(),
+                system_prompt=system_prompt(ROLES["planner"]) if legacy else deps.prompts.planner_system(),
                 user_prompt=task_prompt(state["title"], 1, []),
-                tools=[t for t in rt.tools if t.name in PLANNER_TOOLS],
+                tools=rt.tools if legacy else [t for t in rt.tools if t.name in PLANNER_TOOLS],
             )
         return {
             "status": "planned",

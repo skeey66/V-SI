@@ -8,7 +8,8 @@ export default defineConfig({
     proxy: {
       // /api 로 시작하는 요청은 LangGraph 백엔드(lg_api)로 넘긴다.
       '/api': {
-        target: 'http://127.0.0.1:8200',
+        // 도커에서는 VSI_API_URL=http://lg-api:8000 으로 바꿔 띄운다.
+        target: process.env.VSI_API_URL || 'http://127.0.0.1:8200',
         changeOrigin: true,
         // SSE 응답이 버퍼링되지 않도록: 압축을 요청하지 않고, 응답을 그대로 흘려보낸다.
         configure(proxy) {

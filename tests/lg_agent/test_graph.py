@@ -154,3 +154,23 @@ async def test_rag_disabled_skips_retrieval():
     deps = replace(deps_with(tools), knowledge=fake_retriever, options=RuntimeOptions(rag_enabled=False))
     await build_graph(deps).ainvoke(initial_state("REQ-7", "x"), CFG)
     assert called == []
+
+
+def test_judge_carries_previous_failure_of_now_passing_verifier():
+    from lg_agent.nodes.judge import CARRIED_PREFIX, make_judge
+
+    prev = [{"agent": "security", "verdict": "FAIL", "summary": "md5 금지"}]
+    state = {
+        "verdicts": {
+            "qa": {"agent": "qa", "verdict": "FAIL", "exit_code": 1, "summary": "md5 값을 기대"},
+            "security": {"agent": "security", "verdict": "PASS", "exit_code": 0, "summary": "통과"},
+        },
+        "revision": 2, "max_revisions": 3, "feedback": prev,
+    }
+    out = make_judge(memory=True)(state)
+    assert [f["agent"] for f in out["feedback"]] == ["qa", "security"]
+    assert out["feedback"][1]["summary"] == CARRIED_PREFIX + "md5 금지"
+    # 한 번 더 넘겨도 접두어가 겹치지 않는다
+    again = make_judge(memory=True)({**state, "feedback": out["feedback"]})
+    assert again["feedback"][1]["summary"].count(CARRIED_PREFIX) == 1
+    assert [f["agent"] for f in make_judge(memory=False)(state)["feedback"]] == ["qa"]

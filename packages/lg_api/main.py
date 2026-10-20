@@ -158,6 +158,36 @@ async def approve(requirement_id: str, body: Approval, request: Request) -> dict
     return {"ok": True}
 
 
+@app.post("/api/requirements/{requirement_id}/resume", status_code=202)
+async def resume(requirement_id: str, request: Request) -> dict:
+    """프로세스가 죽어 멈춘 실행을 체크포인트에서 이어간다.
+
+    LangGraph 는 노드가 끝날 때마다 상태를 체크포인터(Postgres)에 남긴다. 죽은 시점에
+    돌던 노드는 처음부터 다시 돌고, 이미 끝난 노드는 다시 돌지 않는다. 기존 경로의
+    리컨실러처럼 **자동으로** 다시 시작하지는 않는다 — 이 엔드포인트를 불러야 한다.
+    재시작 전의 SSE 이벤트 기록은 메모리에만 있었으므로 사라진다.
+    """
+    state = request.app.state
+    run = state.runs.get(requirement_id)
+    if run and run.task and not run.task.done():
+        raise HTTPException(409, "이미 실행 중이다")
+    snapshot = await state.graph.aget_state({"configurable": {"thread_id": requirement_id}})
+    if not snapshot.values:
+        raise HTTPException(404, f"체크포인트가 없다: {requirement_id}")
+    if not snapshot.next:
+        raise HTTPException(409, f"이미 끝났다: {snapshot.values.get('status')}")
+    if any(t.interrupts for t in snapshot.tasks):
+        raise HTTPException(409, "승인을 기다리는 중이다 — /approve 를 써라")
+    if run is None:
+        values = snapshot.values
+        run = state.runs.add(Run(requirement_id=requirement_id, title=values.get("title", ""),
+                                 status=values.get("status", "planned"),
+                                 revision=values.get("revision", 1)))
+    await run.publish("resumed", approved=None, from_checkpoint=True, next=list(snapshot.next))
+    _start(request, run, None)
+    return {"ok": True, "next": list(snapshot.next)}
+
+
 @app.get("/api/requirements/{requirement_id}/files")
 async def files(requirement_id: str, request: Request) -> list[dict]:
     _run_or_404(request, requirement_id)

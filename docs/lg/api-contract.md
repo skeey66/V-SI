@@ -11,6 +11,7 @@
 | GET | `/api/requirements/{id}` | | `{"requirement_id","title","status","revision","verdicts":{agent: Verdict},"history":[...],"gate":{"ok","detail"}|null,"pending_approval": {"detail"}|null,"langsmith_urls":[str]}` |
 | GET | `/api/requirements/{id}/events` | `?after=<seq>` (선택) | **SSE** (아래) |
 | POST | `/api/requirements/{id}/approve` | `{"approved": bool}` | 202 `{"ok": true}` — `interrupt` 로 멈춘 그래프를 재개 |
+| POST | `/api/requirements/{id}/resume` | | 202 `{"ok": true, "next": [노드]}` — API 가 죽어 멈춘 실행을 Postgres 체크포인트에서 이어감 |
 | GET | `/api/requirements/{id}/files` | | `[{"path": str}]` |
 | GET | `/api/requirements/{id}/files/{path}` | | `{"path", "content"}` |
 | POST | `/api/requirements/{id}/feedback` | `{"score": 1 or 0, "comment": str?}` | `{"ok": true}` — LangSmith 피드백으로 기록 |

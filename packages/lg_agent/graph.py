@@ -27,7 +27,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from lg_agent.deps import Deps
-from lg_agent.nodes import approval, judge, make_dev, make_gate, make_planner, make_verifier
+from lg_agent.nodes import approval, make_dev, make_gate, make_judge, make_planner, make_verifier
 from lg_agent.state import VsiState
 
 
@@ -51,7 +51,7 @@ def build_graph(deps: Deps, checkpointer: BaseCheckpointSaver | None = None):
     g.add_node("dev", make_dev(deps))
     g.add_node("qa", make_verifier(deps, "qa"))
     g.add_node("security", make_verifier(deps, "security"))
-    g.add_node("judge", judge)
+    g.add_node("judge", make_judge(memory=deps.options.feedback_memory))
 
     g.add_edge(START, "planner")
     g.add_edge("planner", "gate")

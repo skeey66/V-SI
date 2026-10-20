@@ -149,6 +149,42 @@ services:
     depends_on: [event-gateway]
     ports: ["5173:5173"]
 
+  # ── LangGraph 경로 (미니프로젝트) ─────────────────────────────────────────
+  # `docker compose --profile lg up -d --build` 로 띄운다. 기존 A2A 경로와 같은
+  # postgres·workspace(MCP 도구 서버)를 함께 쓴다. 키는 .env 에서 읽는다.
+  knowledge:
+    profiles: [lg]
+    build: .
+    command: ["uvicorn", "knowledge_server.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file: [.env]
+    # 질의 임베딩에 OpenAI 를 불러야 하므로 internal 망이 아니라 기본 망에 둔다.
+    ports: ["8011:8000"]
+
+  lg-api:
+    profiles: [lg]
+    build: .
+    command: ["uvicorn", "lg_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file: [.env]
+    environment:
+      VSI_MCP_BASE_URL: http://workspace:8000
+      VSI_KNOWLEDGE_URL: http://knowledge:8000
+      VSI_LG_CHECKPOINT_URL: postgresql://vsi:vsi@postgres:5432/vsi
+    depends_on: [postgres, workspace, knowledge]
+    ports: ["8200:8000"]
+    # workspace(도구 서버)는 internal 망에만 있으므로 두 망에 모두 붙는다.
+    networks: [internal, default]
+
+  web-vue:
+    profiles: [lg]
+    image: node:20-alpine
+    working_dir: /app
+    volumes: ["./web-vue:/app", "/app/node_modules"]
+    environment:
+      VSI_API_URL: http://lg-api:8000
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    depends_on: [lg-api]
+    ports: ["5180:5180"]
+
 networks:
   default:
   # LLM이 쓴 코드가 실행되는 유일한 컨테이너(`workspace`)를 가두는

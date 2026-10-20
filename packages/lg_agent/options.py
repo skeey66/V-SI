@@ -12,3 +12,9 @@ from dataclasses import dataclass
 class RuntimeOptions:
     max_revisions: int = 3
     rag_enabled: bool = True
+    #: Before/After 측정용. "legacy" 면 기존 `llm_agent.roles` 의 기획 프롬프트와
+    #: 도구(`check_acceptance_tests` 포함)를 그대로 쓴다.
+    planner_variant: str = "v2"
+    #: 이전 회차의 반려 사유를 개발에게 계속 보여줄지. 끄면 직전 회차 지적만 간다
+    #: (기존 경로와 같은 동작). Before/After 측정용 토글.
+    feedback_memory: bool = True
