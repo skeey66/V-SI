@@ -25,6 +25,15 @@ dependencies = [
   # 워크스페이스 컨테이너는 internal 망이라 실행 시점에 설치할 수 없다.
   "ruff>=0.6",
   "mcp>=2.2.0,<3.0.0",
+  # LangGraph 경로(packages/lg_agent). langchain-mcp-adapters 는 mcp 2.x 와
+  # 호환되지 않아 넣지 않는다 — lg_agent/mcp_tools.py 참고.
+  "langgraph>=1.2",
+  "langchain>=1.4",
+  "langchain-openai>=1.7",
+  "langgraph-checkpoint-postgres>=3.2",
+  "psycopg[binary]>=3.2",
+  "langsmith>=0.14",
+  "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]

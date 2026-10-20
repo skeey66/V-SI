@@ -23,3 +23,10 @@ build/
 .DS_Store
 .idea/
 .vscode/
+
+# 로컬 워크트리 / 에디터 설정
+.claude/
+
+# git filter-branch 임시 산출물
+.git-rewrite/
+.workspaces/
