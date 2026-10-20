@@ -1,216 +1,190 @@
-# V-SI — 가상 SI 회사
+# V-SI : LangGraph 기반 멀티에이전트 가상 SI 개발팀
 
-**AI 에이전트 네 팀이 각자 자리에서 일하고, 서로 넘기고, 반려하고, 다시 만든다.**
-
-평소 말로 요청하면 된다.
+**말로 요구사항을 적으면, AI 에이전트 네 팀이 기획하고 · 만들고 · 테스트하고 · 보안 검사한다.
+반려되면 스스로 고친다.**
 
 > 장바구니에 담긴 상품 금액을 모두 합치고, 합계가 5만원 이상이면 배송비 3000원을 빼주세요
 
-**기획 → 개발 → QA → 보안** 네 에이전트가 차례로 붙는다. 기획이 무엇을 만들지와
-어떻게 확인할지를 정하고, 개발이 그 확인 항목을 통과하는 코드를 쓰고, QA가 실제로
-테스트를 돌리고, 보안이 위험한 곳을 검사한다. QA가 반려하면 개발이 다시 만든다 —
-사람이 개입하지 않아도 이 왕복이 돈다.
+**기획**이 명세와 인수 테스트를 쓰고, **개발**이 그 테스트를 통과하는 코드를 쓰고, **QA**와
+**보안**이 실제로 `pytest`·`bandit` 을 돌린다. 하나라도 FAIL 이면 그 사유를 들고 개발로
+되돌아간다. 이 과정이 화면에 실시간으로 흐른다.
 
-화면에서는 그 과정이 **3D 사무실**로 보인다. 일하는 자리는 모니터가 켜지고, 일이
-넘어갈 때는 캐릭터가 자리에서 일어나 서류를 들고 걸어간다. 반려되면 빨간 서류를
-들고 되돌아온다.
+![실행 중 화면](docs/lg/img/run-live.png)
 
-## 네 에이전트는 진짜로 따로 산다
+> AI 캠퍼스 미니프로젝트 (과제 2 · 신규 프로젝트) — 결과 보고서: [`docs/lg/REPORT.md`](docs/lg/REPORT.md)
 
-한 프로세스 안에서 역할만 바꿔 부르는 것이 아니다. **각자 독립된 컨테이너**이고,
-표준 프로토콜로 통신하며, 쓸 수 있는 도구가 구조적으로 다르다.
+---
 
-| 에이전트 | 하는 일 | 쓸 수 있는 도구 |
-|---|---|---|
-| **기획** | 명세와 인수 테스트를 쓴다 | `write_file` · `check_acceptance_tests` |
-| **개발** | 그 테스트를 통과시킨다 | `list_files` · `read_file` · `write_file` · `run_lint` |
-| **QA** | 테스트를 실제로 돌린다 | `list_files` · `read_file` · `run_tests` |
-| **보안** | 위험한 코드를 찾는다 | `list_files` · `read_file` · `run_security_scan` |
+## 무엇으로 만들었나
 
-**개발 에이전트에게는 `run_tests` 라는 도구가 존재하지 않는다.** 권한 표에 "쓰면
-안 된다"고 적어 두는 것이 아니라, 역할마다 MCP 서버 인스턴스를 따로 만들어
-`/mcp/dev/` 에는 그 도구를 **등록조차 하지 않는다**. 자기 일을 자기가 채점하는
-경로가 애초에 없다.
-
-같은 이유로 개발은 **인수 테스트 파일에 쓸 수 없다**. 시험지를 시험 보는 사람이
-고칠 수 있으면 채점이 채점이 아니다.
-
-개발이 가진 `run_lint` 는 판정 도구가 아니다. 오타 난 변수 이름이나 문법 오류는
-실행해 보기 전에 알 수 있고, 그걸 QA 왕복으로 발견하면 회차 하나가 통째로
-날아간다. 자기 코드를 훑는 것과 통과를 선언하는 것은 다르다.
-
-### 에이전트끼리는 A2A, 도구와는 MCP
-
-```
-   오케스트레이터  ──A2A──▶  기획 · 개발 · QA · 보안
-        │  ▲                        │
-        │  └──── 푸시 콜백 ─────────┘
-        │                           │ MCP
-        ▼                           ▼
-     PostgreSQL              워크스페이스 (격리)
-        │
-        └── 아웃박스 ──▶ 이벤트 게이트웨이 ──WebSocket──▶ 화면
-```
-
-오케스트레이터는 에이전트를 함수로 부르지 않는다. **A2A 프로토콜**로 작업을
-제출하고, 에이전트는 끝나면 푸시 콜백으로 알린다. 에이전트 카드는
-`/.well-known/agent-card.json` 에서 직접 볼 수 있다.
-
-도구 호출은 **MCP** 로 나간다. LLM 이 쓴 코드가 실제로 실행되는 곳은 인터넷 경로가
-없는 `internal: true` 네트워크의 전용 컨테이너 하나뿐이다.
-
-## 협업이 실제로 돌아가게 만드는 것들
-
-여러 에이전트를 붙이는 것 자체는 어렵지 않다. 어려운 것은 **경계를 넘어 일이
-오갈 때 생기는 문제들**이다.
-
-**판정은 모델이 내리지 않는다.** PASS/FAIL 은 `pytest` 와 `bandit` 의 종료 코드가
-정하고, 모델은 그것을 개발이 고칠 수 있는 문장으로 옮긴다. "통과했다고 생각한다"
-는 통과가 아니다. 검증 에이전트가 판정 도구를 부르지 않고 턴을 끝내면 그 작업은
-실패로 처리된다 — 근거 없는 통과를 만드느니 실패시킨다.
-
-**반려는 다음 회차의 입력이 된다.** QA 가 "`test_add` 가 5를 기대했는데 0이 왔다"
-고 적으면 그 문장이 개발 에이전트의 다음 프롬프트에 그대로 들어간다. 회차마다
-산출물이 스냅샷으로 남아서 무엇이 어떻게 바뀌었는지 추적된다.
-
-**목표가 비면 시작하지 않는다.** 기획이 쓴 확인 항목을 구현이 없는 상태에서 돌려
-본다. 쓸 만한 테스트는 반드시 실패한다 — 부를 함수가 없으니까. 통과해 버리면 그
-테스트는 아무것도 검사하지 않는다는 뜻이고, 그대로 개발을 보내면 무엇을 만들어도
-통과한다. 그럴 때는 멈춰서 사람을 부른다.
-
-**죽어도 이어받는다.** 오케스트레이터를 임의 시점에 SIGKILL 해도 재기동만으로
-끝까지 간다. 진행 상태는 전부 DB 에 있고, 리컨실러가 관측해 빠진 것을 다시 보낸다.
-같은 작업이 두 번 실행되지 않도록 멱등성 키로 막는다.
-
-**무한히 고치지 않는다.** 회차 상한, 에이전트별 재시도 상한, 작업 예산, 갇힘
-감지가 층으로 쌓여 있다. 어느 천장에 걸리든 사람을 부르고 멈춘다.
-
-## 돌려 보기
-
-로컬 Ollama 가 필요하다. 비용은 0원이다.
-
-```bash
-ollama serve &
-ollama pull qwen3:8b
-
-cp .env.example .env
-VSI_AGENT_MODE=llm docker compose up -d --build
-```
-
-`http://localhost:5173` 을 열고 **새 요청**에 하고 싶은 말을 적으면 된다.
-
-로컬 모델이라 요구사항 하나에 10~20분 걸린다. 그동안 사무실 탭에서 어느 팀이
-일하는 중인지, 몇 번째 되돌려 고치는 중인지 보인다. 끝나면 **결과물** 탭에서
-만들어진 파일 전체와 검사 결과를 읽고 `.zip` 으로 받을 수 있다.
-
-### LLM 없이 구조만 보기
-
-기본 모드는 **스텁**이다. `VSI_AGENT_MODE` 를 주지 않으면 에이전트가 LLM 을 한
-번도 부르지 않고 대본대로 움직인다 — 협업·복구·환류가 **1초 안에** 전부 돈다.
-
-```bash
-docker compose up -d --build
-./scripts/demo.sh    # 환류 2회를 거쳐 accepted 까지 완주한다
-```
-
-`scenarios/` 의 대본을 바꾸면 QA 가 두 번 반려하는 경우, 개발이 크래시하는 경우,
-기획이 쓸모없는 테스트를 내는 경우를 결정적으로 재현할 수 있다.
-
-## LangGraph 경로 (미니프로젝트)
-
-같은 협업 흐름을 **LangGraph** 로 다시 구현한 경로가 함께 들어 있다. 기존 A2A 경로는
-비교군으로 그대로 둔다.
-
-```bash
-docker compose --profile lg up -d --build postgres workspace knowledge lg-api web-vue
-open http://localhost:5180      # 요청 · 실시간 진행(SSE) · 결과물 · 관리자(LangSmith)
-```
-
-- 그래프 `packages/lg_agent/` · API `packages/lg_api/` · RAG 지식 MCP 서버 `services/knowledge_server/` · 화면 `web-vue/`
-- 결과 보고서(Before/After 실측·트레이드오프): [`docs/lg/REPORT.md`](docs/lg/REPORT.md)
-- API 계약: [`docs/lg/api-contract.md`](docs/lg/api-contract.md)
-
-## 화면
-
-| 탭 | 무엇을 보여 주나 |
+| 요구사항 | 구현 |
 |---|---|
-| **사무실** | 지금 벌어지는 일. 에이전트가 일하고, 걸어가서 넘기고, 막히면 손을 든다 |
-| **결과물** | 무엇이 남았는가. 만들어진 파일 전문, 검사 결과, 몇 번 고쳤는지 |
-| **그래프** | 노드·이벤트 로그. 디버깅용 |
-
-사무실의 캐릭터를 클릭하면 그 팀이 낸 산출물이 열린다. 진행 표시줄은 어느 탭에
-있든 보이고, 진행 중이면 경과 시간이 올라간다.
-
-### 사람을 부르는 두 가지
-
-| 상태 | 언제 | 그 다음 |
-|---|---|---|
-| **확인해 주세요** | 기획 직후, 일을 시작하기 전 | 버튼 하나 누르면 **개발부터 이어진다** |
-| **도와주세요** | 여러 번 고쳐 봤지만 끝내지 못했을 때 | 사람이 직접 손봐야 한다 |
-
-앞의 것은 30초면 끝나고 버려지는 시간이 없다. 뒤의 것은 이미 시간을 다 쓴 뒤다.
-그래서 같은 색으로 그리지 않는다.
+| **LangChain · LangGraph 멀티에이전트** | `StateGraph` 7노드. 에이전트 4종은 `create_agent`(ReAct). QA·보안 **병렬** 실행, 조건부 엣지로 **반려 루프**, `interrupt()` 로 **사람 승인** |
+| **MCP 서버** | ① 도구 서버 — 역할마다 별도 MCP 인스턴스 (개발에게는 `run_tests` 가 *존재하지 않는다*) ② 지식 서버 — RAG 검색 tool + `guide://` resource |
+| **Vue 기반 UI** | Vue 3 · vue-router. 요청 / 실행 상세 / 관리자 |
+| **FastAPI REST API** | 요구사항 · 승인 · 재개 · 결과물 · 피드백 · 관리자 |
+| **스트리밍 응답** | SSE — 노드 진행 · 도구 호출 · 판정 · **LLM 토큰**을 실시간 전송, 끊겨도 `?after=` 로 이어받기 |
+| **LangSmith 관리자 기능** | 실행 수 · 성공률 · 지연(p95) · 토큰 · 비용 집계, 트레이스 링크, 👍/👎 피드백, **Prompt Hub 프롬프트 버전 교체**(재배포 없이) |
+| RAG | bandit 규칙별 보안 조치 가이드 25개 → FAISS. 보안 FAIL 이면 가이드를 찾아 개발에게 넘긴다 |
 
 ## 구조
 
 ```
-packages/          여러 컨테이너가 공유하는 라이브러리
-  orchestrator/      워크플로 엔진 · 상태 기계 · 리컨실러 · HTTP API
-  llm_agent/         에이전트 루프 — 도구 호출, 예산, 판정 수집
-  stub_agent/        LLM 없이 대본대로 움직이는 에이전트
-  agent_entry/       에이전트 프로세스 진입점 (역할은 환경변수로)
-  agent_runtime/     추적(OpenTelemetry) 공통
-
-services/          각자 컨테이너로 뜨는 것
-  tool_server/       MCP 도구 서버 — 역할별로 다른 도구를 마운트한다
-  event_gateway/     DB 아웃박스 → WebSocket 중계
-
-web/               React + three.js 화면
-tests/             단위 · 통합 · 수용
-scenarios/         스텁 에이전트 대본 (환류 2회, 크래시 주입 등)
-docs/specs/        왜 이렇게 설계했는가 — 코드 주석이 이 문서를 참조한다
-docs/decisions/    구현하며 뒤집은 판단과 그 대가
+ Vue 3 ──SSE/REST──▶ FastAPI ───────────── LangSmith (추적 · 피드백 · Prompt Hub)
+                        │
+                 LangGraph StateGraph ──── Postgres 체크포인터
+  planner → gate ─┬──────────────▶ dev ─┬─▶ qa ───────┬─▶ judge ─┬─▶ 완료 / 에스컬레이션
+                  └─▶ approval ────┘    └─▶ security ─┘          └─▶ dev  (반려 사유와 함께)
+                     (interrupt)                │
+                        │ MCP (역할별 경로)       │ MCP
+                        ▼                       ▼
+            도구 서버 (인터넷 없는 격리망)       지식 서버 (FAISS RAG)
 ```
 
-에이전트 넷은 **같은 이미지**를 쓰고 `VSI_AGENT` 환경변수로 역할이 갈린다. 역할이
-다르면 프롬프트가 다르고, 붙는 MCP 경로가 다르고, 그래서 쓸 수 있는 도구가 다르다.
+### 설계 원칙
 
-## 창구
+**판정은 모델이 내리지 않는다.** QA·보안 노드는 판정 도구를 *직접* 부르고, PASS/FAIL 은
+`pytest`·`bandit` 의 종료코드가 정한다. LLM 은 FAIL 일 때만 불러서, 실패 출력을 개발이 고칠
+수 있는 문장으로 옮긴다. PASS 면 LLM 을 아예 부르지 않는다.
+
+**자기 시험지는 자기가 채점하지 못한다.** 개발 에이전트의 MCP 경로에는 `run_tests` 가
+등록조차 되어 있지 않고, 인수 테스트 파일에는 쓸 수 없다.
+
+**목표가 비면 시작하지 않는다.** 기획이 쓴 테스트를 구현 없이 돌려 본다. 통과해 버리면 그
+테스트는 아무것도 검사하지 않는다는 뜻이므로, 그래프를 멈추고 사람에게 묻는다.
+
+**고친 것을 다시 깨지 않는다.** 판정 노드는 이번에 통과한 검증자의 *이전* 지적도 함께
+넘긴다. 보안("md5 금지")과 QA("md5 값을 기대")가 회차마다 번갈아 FAIL 하던 진동을 실측으로
+발견하고 넣었다.
+
+**무한히 고치지 않는다.** 회차 상한(3) · 에이전트 턴 상한(8) · 시간 예산(300초) · 도구 호출
+상한(90초) · 출력 토큰 상한(2,000)이 층으로 쌓여 있다.
+
+**LLM 이 쓴 코드는 격리된 곳에서만 돈다.** 도구 서버는 인터넷이 없는 `internal` 망의
+컨테이너이고, API 키도 없다.
+
+## 실행
+
+`.env` 에 키를 넣는다.
+
+```bash
+OPENAI_API_KEY=sk-...
+LANGSMITH_API_KEY=lsv2_...
+```
+
+```bash
+docker compose --profile lg up -d --build postgres workspace knowledge lg-api web-vue
+open http://localhost:5180
+```
 
 | | 주소 |
 |---|---|
-| 화면 | http://localhost:5173 |
-| 오케스트레이터 API | http://localhost:8000 |
-| 이벤트 스트림 | `ws://localhost:8100/ws` |
-| 추적 (Jaeger) | http://localhost:16686 |
-| DB | `postgresql://vsi:vsi@localhost:55432/vsi` |
+| 화면 | http://localhost:5180 |
+| API | http://localhost:8200 · 문서 http://localhost:8200/docs |
+| 지식 MCP 서버 | http://localhost:8011/mcp/ |
 
-에이전트 넷은 `8001`(기획) `8002`(개발) `8003`(QA) `8004`(보안)로 열려 있다.
+모든 포트는 `127.0.0.1` 에만 열린다 — API 에 인증이 없으므로, 같은 네트워크의 다른 사람이
+요구사항을 넣어 OpenAI 한도를 쓰지 못하게 한다.
 
 ```bash
-curl -X POST localhost:8000/requirements -H 'content-type: application/json' \
-  -d '{"requirement_id":"REQ-001","title":"회원가입","run_id":"run-1"}'
+curl -X POST localhost:8200/api/requirements -H 'content-type: application/json' \
+  -d '{"title":"문자열이 회문인지 판별하는 함수"}'            # → {"requirement_id": "REQ-…"}
 
-curl localhost:8000/requirements/REQ-001                    # 진행 상태 + 회차 이력
-curl localhost:8000/requirements/REQ-001/artifacts          # 산출물 목록
-curl -X POST localhost:8000/requirements/REQ-001/approve    # 기획 게이트 승인
+curl -N localhost:8200/api/requirements/REQ-…/events          # SSE 실시간 스트림
+curl localhost:8200/api/requirements/REQ-…/files              # 만들어진 파일
+curl -X POST localhost:8200/api/requirements/REQ-…/approve -d '{"approved":true}' \
+  -H 'content-type: application/json'                         # 기획 게이트 승인
+curl -X POST localhost:8200/api/requirements/REQ-…/resume     # 서버가 죽었다면 체크포인트에서 재개
+```
+
+전체 계약은 [`docs/lg/api-contract.md`](docs/lg/api-contract.md).
+
+## 화면
+
+| 실행 상세 | 관리자 (LangSmith) |
+|---|---|
+| ![](docs/lg/img/run-detail.png) | ![](docs/lg/img/admin.png) |
+
+- **실행 상세** — 진행 단계 표시, 실시간 타임라인(도구 호출 · 판정 · RAG 검색), 에이전트별 토큰
+  출력, 승인 버튼, 결과 파일 보기, 👍/👎 피드백, LangSmith 트레이스 링크
+- **관리자** — 실행 통계, 실행별 비용·지연, 기획 프롬프트 버전 관리, RAG·회차 상한 토글
+
+## Before / After 실측
+
+모델 `gpt-4o-mini`. 원자료 `docs/lg/bench-*.json`, 스크립트 `scripts/bench_lg.py`.
+
+| 개선 | Before | After |
+|---|---|---|
+| 기획 프롬프트 (3문항 × 2회) | 완료 **0/6**, $0.0056/건, 45.6초 | 완료 **6/6**, $0.0010/건, 12.1초 |
+| RAG + 반려 기억 (위험 방식을 지시하는 3문항 × 2회) | 완료 0/6 | 완료 2/6 (토큰 +28%) |
+| LLM 토큰 스트리밍 | 0개 (`create_agent` 하위 그래프) | 760개/건 (`subgraphs=True`) |
+| 크래시 복구 | — | SIGKILL 후 `/resume` → 끝난 노드는 건너뛰고 이어서 완료 |
+| 오케스트레이션 코드 | 3,221줄 (A2A 경로) | 1,111줄 |
+
+한계와 트레이드오프(자동 복구 없음, 이벤트 휘발, 격리 후퇴, RAG 비용, 요구사항-정책 충돌)는
+[보고서 4장](docs/lg/REPORT.md#4-한계와-트레이드오프)에 정리했다.
+
+개발 · 시연 · 측정 전체 비용: **74회 실행, $0.22**. 정상 요구사항 1건은 약 $0.001.
+
+## 폴더
+
+```
+packages/
+  lg_agent/            LangGraph 그래프
+    graph.py             StateGraph 조립 · 체크포인터
+    nodes/               planner · gate · approval · dev · qa/security · judge
+    deps.py              의존성 주입 (LLM · MCP · 프롬프트 저장소 · RAG)
+    mcp_tools.py         MCP → LangChain 도구 어댑터
+    prompts.py           기획 프롬프트 · Prompt Hub 버전 선택
+    knowledge.py         지식 서버 클라이언트
+  lg_api/              FastAPI — SSE 스트리밍 · 승인 · 재개 · 관리자(LangSmith)
+
+services/
+  tool_server/         MCP 도구 서버 — 역할별로 다른 도구를 마운트
+  knowledge_server/    MCP 지식 서버 — 보안 조치 가이드 RAG (FAISS)
+
+web-vue/               Vue 3 화면 — SSE 는 fetch 스트림을 직접 파싱
+scripts/bench_lg.py    Before/After 측정
+docs/lg/               보고서 · API 계약 · 측정 결과 · 화면
+tests/lg_agent  tests/lg_api  tests/knowledge_server
 ```
 
 ## 테스트
 
 ```bash
 pip install -e ".[dev]"
-pytest tests -q --ignore=tests/integration   # 295개 — 스택 없이 돈다
-pytest tests/integration -q                  # 50개 — 스택이 떠 있어야 한다
-
-cd web && npm install && npx vitest run      # 63개
+pytest tests/lg_agent tests/lg_api tests/knowledge_server -q   # 22개
+cd web-vue && npm install && npx vitest run                     # 11개
 ```
 
-통합 시험은 실제 컨테이너를 상대로 돈다 — A2A 제출, 푸시 콜백, DB, 오케스트레이터
-SIGKILL 후 복구까지. 실제 모델을 쓰는 시험은 기본 실행에서 제외돼 있다(`-m llm`).
+가짜 LLM·가짜 도구를 주입해 그래프 전체를 돌리므로 **OpenAI 를 부르지 않는다** (비용 0원).
+반려 루프, 회차 상한, 사람 승인 재개, RAG 가이드 전달, SSE 이벤트 순서, 재접속을 검사한다.
 
 ## 기술 스택
 
-Python 3.11 · FastAPI · SQLAlchemy(async) · PostgreSQL ·
-[A2A SDK](https://github.com/google/a2a-python) · [MCP](https://modelcontextprotocol.io) ·
-Ollama · OpenTelemetry + Jaeger · React 18 + TypeScript + three.js · Docker Compose
+Python 3.11 · **LangGraph · LangChain** · OpenAI `gpt-4o-mini` · **MCP** · FAISS ·
+**FastAPI** (SSE) · **LangSmith** · PostgreSQL · **Vue 3** · Vite · Docker Compose
+
+---
+
+## 기존 구현 (Before 비교군)
+
+이 저장소에는 LangGraph 이전에 직접 만든 구현도 그대로 남아 있다. 같은 네 에이전트가
+**각자 독립 컨테이너**로 살고, **A2A 프로토콜**로 일을 주고받고, 자체 오케스트레이터(상태 기계 ·
+DB 아웃박스 · 리컨실러)가 흐름을 관리한다. 화면은 React + three.js 3D 사무실이다.
+
+```bash
+ollama serve & ollama pull qwen3:8b
+VSI_AGENT_MODE=llm docker compose up -d --build    # http://localhost:5173
+docker compose up -d --build && ./scripts/demo.sh  # LLM 없이 대본대로 (1초)
+```
+
+| | 경로 |
+|---|---|
+| 오케스트레이터 · 에이전트 루프 | `packages/orchestrator/` · `packages/llm_agent/` · `packages/agent_entry/` |
+| 이벤트 중계 · 3D 화면 | `services/event_gateway/` · `web/` |
+| 설계 문서 · 결정 기록 | `docs/specs/` · `docs/decisions/` |
+| 테스트 | `pytest tests -q --ignore=tests/integration` · `pytest tests/integration -q` (스택 필요) |
+
+Python 3.11 · FastAPI · SQLAlchemy(async) · PostgreSQL · [A2A SDK](https://github.com/google/a2a-python) ·
+[MCP](https://modelcontextprotocol.io) · Ollama · OpenTelemetry + Jaeger · React 18 + three.js
