@@ -141,7 +141,7 @@ const traceUrl = computed(() => detail.value?.langsmith_urls?.at(-1) || '')
       <StatusBadge :status="status" />
       <span>{{ revision }}회차</span>
       <span v-if="elapsed !== null" class="muted">
-        ⏱ {{ formatSeconds(elapsed) }}{{ finished ? '' : ' (진행 중)' }}
+        소요 {{ formatSeconds(elapsed) }}{{ finished ? '' : ' (진행 중)' }}
       </span>
       <span class="muted stream">스트림: {{ streamStatus }}</span>
     </div>

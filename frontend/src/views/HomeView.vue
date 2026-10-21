@@ -103,11 +103,13 @@ onUnmounted(() => clearInterval(timer))
           <p class="lead">만들 기능을 적어 주시면 네 팀이 명세부터 검수까지 맡아 처리합니다.</p>
         </div>
         <table class="approval-line" aria-label="결재란">
+          <tbody>
           <tr>
             <th rowspan="2" class="approval-label">결<br />재</th>
             <th v-for="t in TEAMS" :key="t.id" :style="{ '--team': t.color }">{{ t.name }}</th>
           </tr>
           <tr><td v-for="t in TEAMS" :key="t.id" /></tr>
+          </tbody>
         </table>
       </header>
 

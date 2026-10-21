@@ -123,7 +123,7 @@ onMounted(loadAll)
       <div><span class="muted">모델</span> <code>{{ config.model }}</code></div>
       <div>
         <span class="muted">LangSmith 프로젝트</span> <code>{{ config.langsmith_project }}</code>
-        <a v-if="config.langsmith_url" :href="config.langsmith_url" target="_blank" rel="noopener">LangSmith 열기 ↗</a>
+        <a v-if="config.langsmith_url" :href="config.langsmith_url" target="_blank" rel="noopener">LangSmith 열기</a>
       </div>
       <label class="row"><input v-model="form.rag_enabled" type="checkbox" /> RAG(지식 검색) 사용</label>
       <fieldset class="stages" :disabled="!form.rag_enabled">
@@ -217,7 +217,7 @@ onMounted(loadAll)
             <td>{{ formatNumber(r.total_tokens) }}</td>
             <td>{{ formatCost(r.total_cost) }}</td>
             <td :class="{ fail: r.feedback_score === 0, pass: r.feedback_score === 1 }">{{ feedbackLabel(r.feedback_score) }}</td>
-            <td><a v-if="r.url" :href="r.url" target="_blank" rel="noopener">열기 ↗</a></td>
+            <td><a v-if="r.url" :href="r.url" target="_blank" rel="noopener">트레이스</a></td>
           </tr>
         </tbody>
       </table>
@@ -281,7 +281,9 @@ onMounted(loadAll)
 .scroll-x { overflow-x: auto; }
 /* 실행이 쌓여도 페이지가 끝없이 길어지지 않게 — 머리줄은 고정 */
 .runs-table { max-height: 520px; overflow-y: auto; border: 1px solid var(--rule); border-radius: 6px; }
-.runs-table th { position: sticky; top: 0; z-index: 1; }
+.runs-table th { position: sticky; top: 0; z-index: 1; white-space: nowrap; }
+/* 요구사항 제목 칸만 줄바꿈하고, 시각·숫자·링크는 한 줄로 */
+.runs-table td:not(:nth-child(2)) { white-space: nowrap; }
 .preview { max-width: 480px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 tr.active { background: var(--ok-weak); }
 .reviews { list-style: none; margin: 0; padding: 0; }

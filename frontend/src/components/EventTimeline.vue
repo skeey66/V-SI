@@ -20,6 +20,26 @@ import { AGENT_LABELS, formatTime, formatSeconds, STATUS_LABELS } from '../utils
 const props = defineProps({ events: { type: Array, required: true } })
 
 const label = (agent) => AGENT_LABELS[agent] || agent
+
+// 이벤트 종류 → 짧은 라벨
+const KIND = {
+  run_started: '접수', agent_start: '착수', tool_call: '도구', tool_result: '결과', node_end: '단계',
+  gate: '점검', verdict: '판정', rag: '검색', interrupt: '승인', resumed: '재개', done: '종료', error: '오류',
+}
+const kindClass = (ev) => {
+  if (ev.type === 'verdict') return ev.verdict === 'PASS' ? 'k-ok' : 'k-ng'
+  if (ev.type === 'tool_result' && ev.ok === false) return 'k-ng'
+  if (ev.type === 'gate') return ev.ok ? 'k-ok' : 'k-ng'
+  if (ev.type === 'done') return ev.status === 'accepted' ? 'k-ok' : 'k-ng'
+  if (ev.type === 'error') return 'k-ng'
+  if (ev.type === 'interrupt') return 'k-wait'
+  if (ev.type === 'rag') return 'k-rag'
+  return ''
+}
+// 3D 사무실의 팀 색과 같다
+const TEAM_COLOR = { planner: '#d4805c', dev: '#6f9fd8', qa: '#d8b64a', security: '#79ad86' }
+// 같은 날 실행이라 시각만 보여준다
+const clock = (ts) => formatTime(ts).split(' ').pop()
 // tool_call 의 args 는 길 수 있으므로 한 줄로 줄여서 보여준다
 const shortArgs = (args) => {
   const s = typeof args === 'string' ? args : JSON.stringify(args)
@@ -48,49 +68,52 @@ watch(
       </div>
 
       <div class="item" :class="ev.type">
-        <span class="time">{{ formatTime(ev.ts) }}</span>
+        <span class="time">{{ clock(ev.ts) }}</span>
+        <span class="kind" :class="kindClass(ev)">{{ KIND[ev.type] || ev.type }}</span>
         <div class="body">
-          <template v-if="ev.type === 'run_started'">🚀 실행 시작: {{ ev.title }}</template>
+          <span v-if="ev.agent" class="who" :style="{ '--team': TEAM_COLOR[ev.agent] }">{{ label(ev.agent) }}</span>
 
-          <template v-else-if="ev.type === 'agent_start'">
-            ▶ <b>{{ label(ev.agent) }}</b> 에이전트 시작
-          </template>
+          <template v-if="ev.type === 'run_started'">{{ ev.title }}</template>
+
+          <template v-else-if="ev.type === 'agent_start'">작업을 시작했습니다</template>
 
           <template v-else-if="ev.type === 'tool_call'">
-            🔧 {{ label(ev.agent) }} → <code>{{ ev.tool }}</code>
-            <span class="muted">{{ shortArgs(ev.args) }}</span>
+            <code>{{ ev.tool }}</code> <span class="muted args">{{ shortArgs(ev.args) }}</span>
           </template>
 
           <template v-else-if="ev.type === 'tool_result'">
-            ↩ <code>{{ ev.tool }}</code>
+            <code>{{ ev.tool }}</code>
             <span :class="ev.ok ? 'pass' : 'fail'">{{ ev.ok ? '성공' : '실패' }}</span>
             <span v-if="ev.exit_code !== undefined && ev.exit_code !== null" class="muted">
-              (exit {{ ev.exit_code }})
+              종료코드 {{ ev.exit_code }}
             </span>
           </template>
 
           <template v-else-if="ev.type === 'node_end'">
-            <span class="muted">■ {{ label(ev.node) }} 노드 종료</span>
-            <span v-if="ev.status" class="muted"> → {{ STATUS_LABELS[ev.status] || ev.status }}</span>
+            <span class="muted">{{ label(ev.node) }} 단계 끝</span>
+            <span v-if="ev.status" class="muted"> · {{ STATUS_LABELS[ev.status] || ev.status }}</span>
           </template>
 
-          <template v-else-if="ev.type === 'gate'">
-            🚦 게이트: <span :class="ev.ok ? 'pass' : 'fail'">{{ ev.ok ? '통과' : '차단' }}</span>
-            <span class="muted"> {{ ev.detail }}</span>
-          </template>
+          <details v-else-if="ev.type === 'gate'">
+            <summary>
+              인수 테스트 점검 <span :class="ev.ok ? 'pass' : 'fail'">{{ ev.ok ? '통과' : '차단' }}</span>
+            </summary>
+            <pre>{{ ev.detail }}</pre>
+          </details>
 
           <!-- 판정은 요약이 길 수 있으므로 펼쳐보기 -->
           <details v-else-if="ev.type === 'verdict'">
             <summary>
-              ⚖ <b>{{ label(ev.agent) }}</b> 판정
-              <span :class="ev.verdict === 'PASS' ? 'pass' : 'fail'">{{ ev.verdict }}</span>
-              <span class="muted"> (exit {{ ev.exit_code }}, {{ ev.revision }}회차)</span>
+              <span :class="ev.verdict === 'PASS' ? 'pass' : 'fail'">{{ ev.verdict === 'PASS' ? '합격' : '불합격' }}</span>
+              <span class="muted"> 종료코드 {{ ev.exit_code }} · {{ ev.revision }}회차</span>
             </summary>
             <pre>{{ ev.summary }}</pre>
           </details>
 
           <details v-else-if="ev.type === 'rag'">
-            <summary>📚 {{ label(ev.agent) }} 지식 검색 · {{ COLLECTION_LABELS[ev.collection] || ev.collection || '보안 조치' }}: {{ ev.hits?.length || 0 }}건</summary>
+            <summary>
+              {{ COLLECTION_LABELS[ev.collection] || ev.collection || '보안 조치' }} 문서 {{ ev.hits?.length || 0 }}건
+            </summary>
             <div class="muted">질의: {{ ev.query }}</div>
             <ul>
               <li v-for="h in ev.hits" :key="h.id">
@@ -99,24 +122,16 @@ watch(
             </ul>
           </details>
 
-          <template v-else-if="ev.type === 'interrupt'">
-            ✋ <b>사람 승인 필요</b>: {{ ev.detail }}
-          </template>
+          <template v-else-if="ev.type === 'interrupt'"><b>사람 승인이 필요합니다.</b> {{ ev.detail }}</template>
 
-          <template v-else-if="ev.type === 'resumed'">
-            ▶ 재개: {{ ev.approved ? '승인됨' : '중단됨' }}
-          </template>
+          <template v-else-if="ev.type === 'resumed'">{{ ev.approved ? '승인되어 이어서 진행합니다' : '중단했습니다' }}</template>
 
           <template v-else-if="ev.type === 'done'">
-            🏁 <b>종료</b>: {{ STATUS_LABELS[ev.status] || ev.status }} ·
-            {{ ev.revision }}회차 · {{ formatSeconds(ev.elapsed_s) }}
+            <b>{{ STATUS_LABELS[ev.status] || ev.status }}</b>
+            <span class="muted"> · {{ ev.revision }}회차 · {{ formatSeconds(ev.elapsed_s) }}</span>
           </template>
 
-          <template v-else-if="ev.type === 'error'">
-            <span class="fail">❌ 오류: {{ ev.message }}</span>
-          </template>
-
-          <template v-else>{{ ev.type }}</template>
+          <template v-else-if="ev.type === 'error'"><span class="fail">{{ ev.message }}</span></template>
         </div>
       </div>
     </template>
@@ -125,8 +140,22 @@ watch(
 
 <style scoped>
 .timeline { max-height: 560px; overflow-y: auto; }
-.item { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px dashed var(--border); }
-.time { color: var(--muted); font-size: 12px; white-space: nowrap; font-family: var(--mono); padding-top: 1px; }
+.item { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; border-bottom: 1px dashed var(--border); }
+.time { color: var(--muted); font-size: 12px; white-space: nowrap; font-family: var(--mono); }
+.kind {
+  flex-shrink: 0; width: 34px; text-align: center; font-size: 11.5px; font-weight: 600;
+  color: var(--ink-2); background: var(--paper-2); border: 1px solid var(--rule); border-radius: 4px;
+}
+.kind.k-ok { color: var(--pass); background: var(--pass-weak); border-color: #b9dcc8; }
+.kind.k-ng { color: var(--seal); background: var(--seal-weak); border-color: #efc4bf; }
+.kind.k-wait { color: var(--hold); background: var(--hold-weak); border-color: #ecd3a6; }
+.kind.k-rag { color: var(--pen); background: var(--pen-weak); border-color: #c9d3f6; }
+.who { font-weight: 600; margin-right: 6px; }
+.who::before {
+  content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--team); margin-right: 5px; vertical-align: 1px;
+}
+.args { font-size: 12px; }
 .body { flex: 1; min-width: 0; word-break: break-word; }
 .body pre { margin-top: 6px; }
 .body ul { margin: 4px 0; padding-left: 18px; }

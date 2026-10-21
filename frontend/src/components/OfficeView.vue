@@ -116,7 +116,7 @@ const pickedOutput = computed(() => (picked.value ? (props.outputs[picked.value]
       캐릭터를 클릭하면 출력 · 드래그로 둘러보기 · 휠로 줌
       <button class="vsi-office-reset" @click="scene?.resetCamera()">시점 초기화</button>
       <button v-if="finished" class="vsi-office-reset" @click="replay">
-        {{ replayCount === null ? '▶ 다시 보기' : '▶ 재생 중…' }}
+        {{ replayCount === null ? '다시 보기' : '재생 중…' }}
       </button>
     </div>
   </div>
