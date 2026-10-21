@@ -38,8 +38,8 @@ from orchestrator.reconciler import DEFAULT_STUCK_AFTER_S
 from orchestrator.workflow import RequirementState
 from tests.integration.harness import db_session, purge, reset_agents, run_scenario, wait_for
 
-QA_FAILS_TWICE = "scenarios/qa_fails_twice.yaml"
-ALL_PASS = "scenarios/all_pass.yaml"
+QA_FAILS_TWICE = "legacy/scenarios/qa_fails_twice.yaml"
+ALL_PASS = "legacy/scenarios/all_pass.yaml"
 
 RECOVERY_TIMEOUT_S = 90.0
 

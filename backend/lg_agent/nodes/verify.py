@@ -15,7 +15,7 @@ from lg_agent.events import emit
 from lg_agent.knowledge import bandit_query
 from lg_agent.nodes.common import run_agent
 from lg_agent.state import Verdict, VsiState
-from llm_agent.roles import ROLES, system_prompt
+from lg_agent.roles import ROLES, system_prompt
 
 _EXPLAIN = (
     "판정 도구 `{tool}` 는 이미 실행됐고 결과는 FAIL 이다 (종료코드 {code}).\n"

@@ -48,7 +48,7 @@ LANGSMITH_API_KEY=lsv2_...
 ```
 
 ```bash
-docker compose --profile lg up -d --build postgres workspace knowledge lg-api web-vue
+docker compose --profile lg up -d --build postgres workspace knowledge backend frontend
 ```
 
 - 화면: http://localhost:5180
@@ -75,24 +75,38 @@ docker compose --profile lg up -d --build postgres workspace knowledge lg-api we
 ## 프로젝트 구조
 
 ```
-packages/lg_agent/         LangGraph 그래프와 에이전트 노드
-packages/lg_api/           FastAPI 서버 (SSE, 관리자 API)
-services/tool_server/      MCP 도구 서버
-services/knowledge_server/ MCP 지식 서버 (RAG)
-web-vue/                   Vue 화면
-docs/lg/                   보고서, API 명세, 실측 결과
+V-SI/
+├── frontend/                 Vue 3 화면
+│   └── src/
+│       ├── views/            요청 · 실행 상세 · 관리자 페이지
+│       ├── components/       타임라인, 에이전트 출력, 3D 사무실 등
+│       ├── office/           3D 사무실 (three.js)
+│       └── api/              REST 클라이언트, SSE 파서
+├── backend/
+│   ├── lg_api/               FastAPI 서버 (REST, SSE, 관리자 API)
+│   └── lg_agent/             LangGraph 그래프
+│       ├── graph.py          워크플로 정의
+│       ├── nodes/            기획 · 개발 · QA/보안 · 판정 노드
+│       └── ...               설정, 의존성 주입, MCP 연동, 프롬프트
+├── mcp_servers/
+│   ├── tool_server/          코드 실행 도구 서버 (격리망)
+│   └── knowledge_server/     보안 가이드 RAG 서버
+├── tests/                    단위 · 통합 테스트
+├── scripts/                  실측 스크립트
+├── docs/lg/                  보고서, API 명세, 실측 결과
+└── legacy/                   이전 버전 (A2A 기반, 비교용)
 ```
 
 ## 테스트
 
 ```bash
 pytest tests/lg_agent tests/lg_api tests/knowledge_server
-cd web-vue && npx vitest run
+cd frontend && npx vitest run
 ```
 
 테스트는 가짜 LLM 을 사용해 API 비용이 들지 않습니다.
 
 ## 참고
 
-이전 버전(A2A 프로토콜 기반, 에이전트별 독립 컨테이너)의 코드도 `packages/orchestrator`,
-`packages/llm_agent`, `web/` 에 비교용으로 남아 있습니다.
+`legacy/` 에는 LangGraph 로 옮기기 전의 이전 버전(A2A 프로토콜, 에이전트별 독립 컨테이너,
+React 3D 화면)이 Before 비교군으로 남아 있습니다.

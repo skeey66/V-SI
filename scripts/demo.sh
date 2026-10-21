@@ -14,7 +14,7 @@ until docker compose exec -T postgres pg_isready -U vsi >/dev/null 2>&1; do slee
 python -m orchestrator.cli start \
   --requirement REQ-DEMO \
   --title "학생 행사 신청" \
-  --scenario scenarios/qa_fails_twice.yaml
+  --scenario legacy/scenarios/qa_fails_twice.yaml
 
 echo
 echo "그래프 UI : http://localhost:5173"

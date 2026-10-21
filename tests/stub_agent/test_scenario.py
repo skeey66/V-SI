@@ -3,7 +3,7 @@ import yaml
 
 from stub_agent.scenario import AgentScenario, ScenarioError
 
-PATH = "scenarios/qa_fails_twice.yaml"
+PATH = "legacy/scenarios/qa_fails_twice.yaml"
 
 
 def test_verdict_sequence_is_consumed_in_order():

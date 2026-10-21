@@ -45,7 +45,7 @@ from tests.integration.harness import (
     wait_for,
 )
 
-QA_FAILS_TWICE = "scenarios/qa_fails_twice.yaml"
+QA_FAILS_TWICE = "legacy/scenarios/qa_fails_twice.yaml"
 JAEGER_URL = "http://localhost:16686"
 GATEWAY_WS_URL = "ws://localhost:8100/ws"
 
@@ -355,7 +355,7 @@ async def test_completion_criterion_5_no_llm_calls() -> None:
 
     py_files = [
         p
-        for root in ("packages", "services")
+        for root in ("legacy/packages", "legacy/services")
         for p in (REPO_ROOT / root).rglob("*.py")
     ]
     assert len(py_files) > 10, f"Python 스캔 대상이 비었다 — 경로가 틀렸다: {py_files}"
@@ -369,7 +369,7 @@ async def test_completion_criterion_5_no_llm_calls() -> None:
     web_files = [
         p
         for pattern in ("*.ts", "*.tsx")
-        for p in (REPO_ROOT / "web" / "src").rglob(pattern)
+        for p in (REPO_ROOT / "legacy" / "web" / "src").rglob(pattern)
     ]
     assert web_files, "web/src 스캔 대상이 비었다 — 경로가 틀렸다"
     web_text = " ".join(p.read_text(encoding="utf-8") for p in web_files)
@@ -378,7 +378,7 @@ async def test_completion_criterion_5_no_llm_calls() -> None:
 
     # package.json의 의존성 목록 자체에도 anthropic/openai SDK가 없어야 한다.
     package_json = (
-        (REPO_ROOT / "web" / "package.json").read_text(encoding="utf-8").lower()
+        (REPO_ROOT / "legacy" / "web" / "package.json").read_text(encoding="utf-8").lower()
     )
     for token in ("anthropic", "openai"):
         assert token not in package_json, f"web/package.json에서 LLM 의존 발견: {token}"
@@ -392,7 +392,11 @@ async def test_completion_criterion_5_no_llm_calls() -> None:
     infra_files = _infra_files(REPO_ROOT)
     assert len(infra_files) >= 5, f"인프라 스캔 대상이 비정상적으로 적다: {infra_files}"
     infra_text = " ".join(p.read_text(encoding="utf-8") for p in infra_files)
-    for token in forbidden:
+    # 설정 파일은 이전 버전과 LangGraph 버전(backend/, `--profile lg`)이 함께 쓴다.
+    # LangGraph 버전은 일부러 OpenAI 를 쓰므로(`langchain-openai` 의존성) 여기서는
+    # SDK 이름이 아니라 **API 주소를 박았는지**만 본다. 이전 버전 코드가 LLM 을
+    # 부르지 않는다는 보장은 위의 legacy/ 스캔이 그대로 지킨다.
+    for token in ("api.anthropic.com", "api.openai.com", "anthropic"):
         assert token not in infra_text.lower(), f"인프라 설정에서 LLM 의존 발견: {token}"
 
 
@@ -411,7 +415,7 @@ def test_completion_criterion_6_ollama_is_the_only_llm_endpoint() -> None:
     경로는 criterion 5와 마찬가지로 `REPO_ROOT`에서 유도한다 — 상대 경로는
     cwd에 따라 조용히 빈 스캔이 될 수 있다.
     """
-    path = REPO_ROOT / "packages" / "llm_agent" / "ollama.py"
+    path = REPO_ROOT / "legacy" / "packages" / "llm_agent" / "ollama.py"
     assert path.is_file(), f"{path} 가 없다 — 경로가 틀렸다"
     text = path.read_text(encoding="utf-8")
     assert "/api/chat" in text, "Ollama chat 엔드포인트를 호출하지 않는다"

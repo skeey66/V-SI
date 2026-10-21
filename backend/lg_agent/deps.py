@@ -28,7 +28,7 @@ class Deps:
     llm: BaseChatModel
     tools: ToolProvider
     agent_budget_s: float = 300.0
-    #: 에이전트 하나가 도는 최대 턴 수 (`llm_agent/loop.py` 의 MAX_TURNS 와 같다)
+    #: 에이전트 하나가 도는 최대 턴 수 (`legacy/packages/llm_agent/loop.py` 의 MAX_TURNS 와 같다)
     max_turns: int = 12
     prompts: PromptStore = field(default_factory=PromptStore)
     options: RuntimeOptions = field(default_factory=RuntimeOptions)

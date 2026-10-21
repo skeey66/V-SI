@@ -14,15 +14,15 @@
 
 | 요구사항 | 구현 | 위치 |
 |---|---|---|
-| LangChain·LangGraph 멀티에이전트 | `StateGraph` 7노드. 에이전트 4종은 `create_agent`(ReAct) 하위 그래프. QA·보안 병렬 fan-out/fan-in, 조건부 엣지로 반려 루프, `interrupt()` 로 사람 승인 | `packages/lg_agent/graph.py`, `nodes/` |
-| MCP 서버 | ① 도구 서버(기존): 역할마다 별도 MCP 인스턴스 → 개발에게는 `run_tests` 가 **존재하지 않음** ② 지식 서버(신규): RAG 검색 tool + `guide://security/{id}` resource | `services/tool_server`, `services/knowledge_server` |
-| Vue UI | Vue 3 + vue-router. 요청·실행 상세(파이프라인·타임라인·실시간 출력·승인·결과물·피드백)·관리자 | `web-vue/` |
-| FastAPI REST | lifespan 에서 그래프·체크포인터 1회 생성, 요구사항·승인·재개·파일·피드백·관리자 API | `packages/lg_api/` |
-| 스트리밍 응답 | SSE. 노드 시작/종료·도구 호출·판정·RAG·**LLM 토큰**을 실시간 전송, `?after=` 재접속 | `lg_api/runs.py`, `web-vue/src/api/sse.js` |
-| LangSmith 관리자 | 트레이스 기반 실행 수·성공률·지연(p95)·토큰·비용 집계, 실행별 트레이스 링크, 👍/👎 피드백 기록, **Prompt Hub 프롬프트 버전 push·활성화**(재배포 없이 교체), RAG·회차 상한 런타임 토글 | `lg_api/admin.py`, `web-vue/src/views/AdminView.vue` |
+| LangChain·LangGraph 멀티에이전트 | `StateGraph` 7노드. 에이전트 4종은 `create_agent`(ReAct) 하위 그래프. QA·보안 병렬 fan-out/fan-in, 조건부 엣지로 반려 루프, `interrupt()` 로 사람 승인 | `backend/lg_agent/graph.py`, `nodes/` |
+| MCP 서버 | ① 도구 서버(기존): 역할마다 별도 MCP 인스턴스 → 개발에게는 `run_tests` 가 **존재하지 않음** ② 지식 서버(신규): RAG 검색 tool + `guide://security/{id}` resource | `mcp_servers/tool_server`, `mcp_servers/knowledge_server` |
+| Vue UI | Vue 3 + vue-router. 요청·실행 상세(파이프라인·타임라인·실시간 출력·승인·결과물·피드백)·관리자 | `frontend/` |
+| FastAPI REST | lifespan 에서 그래프·체크포인터 1회 생성, 요구사항·승인·재개·파일·피드백·관리자 API | `backend/lg_api/` |
+| 스트리밍 응답 | SSE. 노드 시작/종료·도구 호출·판정·RAG·**LLM 토큰**을 실시간 전송, `?after=` 재접속 | `lg_api/runs.py`, `frontend/src/api/sse.js` |
+| LangSmith 관리자 | 트레이스 기반 실행 수·성공률·지연(p95)·토큰·비용 집계, 실행별 트레이스 링크, 👍/👎 피드백 기록, **Prompt Hub 프롬프트 버전 push·활성화**(재배포 없이 교체), RAG·회차 상한 런타임 토글 | `lg_api/admin.py`, `frontend/src/views/AdminView.vue` |
 | (평가 항목) RAG | bandit 규칙별 조치 가이드 25개 → FAISS + `text-embedding-3-small`, 규칙 ID 정확 매칭 + 의미 검색 + 유사도 임계값 | `knowledge_server/index.py` |
 | (평가 항목) 의존성 주입 | 노드는 LLM·MCP 를 직접 만들지 않고 `Deps` 로 받는다 → 가짜 LLM·가짜 도구로 그래프 전체를 네트워크 없이 시험 | `lg_agent/deps.py` |
-| (평가 항목) 단위 테스트 | 파이썬 22개(그래프 흐름 10 · API 7 · RAG 인덱스 5) + 프런트 11개(SSE 파서 7 · 파이프라인 4) — 가짜 LLM 이라 실제 API 비용 0원 | `tests/lg_agent`, `tests/lg_api`, `tests/knowledge_server`, `web-vue/src/**/*.test.js` |
+| (평가 항목) 단위 테스트 | 파이썬 22개(그래프 흐름 10 · API 7 · RAG 인덱스 5) + 프런트 11개(SSE 파서 7 · 파이프라인 4) — 가짜 LLM 이라 실제 API 비용 0원 | `tests/lg_agent`, `tests/lg_api`, `tests/knowledge_server`, `frontend/src/**/*.test.js` |
 
 ## 2. 구조
 
@@ -156,17 +156,17 @@ md5 로 되돌림 → 3회차 보안 FAIL` 로 판정이 번갈아 뒤집혔다.
 
 ```bash
 # Docker (권장)
-docker compose --profile lg up -d --build postgres workspace knowledge lg-api web-vue
+docker compose --profile lg up -d --build postgres workspace knowledge backend frontend
 open http://localhost:5180
 
 # 로컬 (개발용) — 주의: 도구 서버를 호스트에서 직접 띄우면 LLM 이 쓴 코드가 격리 없이
 # 내 컴퓨터에서 실행된다(.env 파일도 읽을 수 있는 위치). 시연·측정은 Docker 로 한다 —
 # Docker 의 workspace 컨테이너에는 키가 없고 인터넷도 없다.
-PYTHONPATH=packages:services VSI_WORKSPACE_BASE=$PWD/.workspaces \
+PYTHONPATH=backend:mcp_servers VSI_WORKSPACE_BASE=$PWD/.workspaces \
   VSI_MCP_ALLOWED_HOSTS=localhost:8010,127.0.0.1:8010 uvicorn tool_server.main:app --port 8010 &
-PYTHONPATH=packages:services uvicorn knowledge_server.main:app --port 8011 &
-PYTHONPATH=packages:services VSI_MCP_BASE_URL=http://localhost:8010 uvicorn lg_api.main:app --host 127.0.0.1 --port 8200 &
-cd web-vue && npm install && npm run dev        # http://localhost:5180
+PYTHONPATH=backend:mcp_servers uvicorn knowledge_server.main:app --port 8011 &
+PYTHONPATH=backend:mcp_servers VSI_MCP_BASE_URL=http://localhost:8010 uvicorn lg_api.main:app --host 127.0.0.1 --port 8200 &
+cd frontend && npm install && npm run dev        # http://localhost:5180
 
 # 시험 (실제 API 를 부르지 않는다)
 .venv/bin/python -m pytest tests/lg_agent tests/lg_api tests/knowledge_server
@@ -179,9 +179,9 @@ cd web-vue && npm install && npm run dev        # http://localhost:5180
 | Git 이력 (전 브랜치) | `.env` 미추적, 두 키 모두 0건 |
 | 작업 파일·Vue 빌드 결과물·로그 | 0건 |
 | Docker 이미지 | `.env` 없음 (Dockerfile 이 `packages`·`services`·`scenarios` 만 복사) |
-| 컨테이너 환경변수 | 키는 `lg-api`·`knowledge` 에만. **LLM 코드가 실행되는 `workspace` 에는 없음** |
+| 컨테이너 환경변수 | 키는 `backend`·`knowledge` 에만. **LLM 코드가 실행되는 `workspace` 에는 없음** |
 | LangSmith 트레이스 | 키 원문 0건. LangChain 이 키를 `{"type": "secret", "id": ["OPENAI_API_KEY"]}` 로 직렬화. 초기 401 오류 트레이스에 OpenAI 가 가린 형태(앞 8자·뒤 4자)만 남음 |
-| 포트 노출 | **수정함** — `lg-api`·`knowledge`·`web-vue` 를 `127.0.0.1` 에만 바인딩. 이전에는 같은 네트워크의 누구나 인증 없이 요청을 넣어 OpenAI 한도를 쓸 수 있었다 |
+| 포트 노출 | **수정함** — `backend`·`knowledge`·`frontend` 를 `127.0.0.1` 에만 바인딩. 이전에는 같은 네트워크의 누구나 인증 없이 요청을 넣어 OpenAI 한도를 쓸 수 있었다 |
 
 `.env` 에 `OPENAI_API_KEY`(또는 `OPENAPI_APIKEY`)와 `LANGSMITH_API_KEY`(또는 `LANGSMITH_APIKEY`).
 

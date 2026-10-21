@@ -27,7 +27,7 @@ from tests.integration.harness import (
     wait_for,
 )
 
-SCENARIO = "scenarios/planner_gate_blocks.yaml"
+SCENARIO = "legacy/scenarios/planner_gate_blocks.yaml"
 
 
 @pytest.fixture(scope="module")

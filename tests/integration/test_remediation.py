@@ -25,8 +25,8 @@ from tests.integration.harness import run_scenario
 #: 아니라 재시도의 부재를 시험하게 된다(실측: SDK는 실패 경로에서 푸시를 보내지
 #: 않아 오케스트레이터가 크래시를 알지도 못한다). 그래서 verdict 순서는 같고
 #: 크래시만 없는 시나리오를 따로 두고 여기서는 환류만 본다.
-FAILS_TWICE = "scenarios/verdicts_fail_twice.yaml"
-NEVER_PASSES = "scenarios/never_passes.yaml"
+FAILS_TWICE = "legacy/scenarios/verdicts_fail_twice.yaml"
+NEVER_PASSES = "legacy/scenarios/never_passes.yaml"
 
 
 @pytest.fixture(scope="module")

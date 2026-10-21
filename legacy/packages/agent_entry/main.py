@@ -107,7 +107,7 @@ if "VSI_AGENT" in os.environ:
     executor = build_executor(
         MODE,
         AGENT,
-        scenario_path=os.environ.get("VSI_SCENARIO", "scenarios/all_pass.yaml"),
+        scenario_path=os.environ.get("VSI_SCENARIO", "legacy/scenarios/all_pass.yaml"),
         ollama_url=os.environ.get("VSI_OLLAMA_URL", "http://host.docker.internal:11434"),
         model=os.environ.get("VSI_MODEL", "qwen3:8b"),
         # 역할별 마운트(`/mcp/<role>/`)를 반영한다 — 단일 엔드포인트를 가정하면

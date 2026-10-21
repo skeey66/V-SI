@@ -21,7 +21,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "packages"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "backend"))
 from lg_agent.settings import load_settings  # noqa: E402  (.env 의 OpenAI 키 별칭 처리)
 
 from knowledge_server.index import GuideIndex, load_docs, openai_embedder  # noqa: E402

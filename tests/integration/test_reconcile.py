@@ -40,15 +40,15 @@ from tests.integration.harness import (
     wait_for,
 )
 
-ALL_PASS = "scenarios/all_pass.yaml"
-ALL_PASS_SLOW = "scenarios/all_pass_slow.yaml"
-QA_FAILS_TWICE = "scenarios/qa_fails_twice.yaml"
-VERDICTS_FAIL_TWICE = "scenarios/verdicts_fail_twice.yaml"
+ALL_PASS = "legacy/scenarios/all_pass.yaml"
+ALL_PASS_SLOW = "legacy/scenarios/all_pass_slow.yaml"
+QA_FAILS_TWICE = "legacy/scenarios/qa_fails_twice.yaml"
+VERDICTS_FAIL_TWICE = "legacy/scenarios/verdicts_fail_twice.yaml"
 #: SIGKILL 테스트 전용. verdict 순서는 위와 같고 지연만 다르다 — 지연이 없으면
 #: 관측해야 할 상태 창이 폴링 간격(200ms)보다 짧아 kill 지점을 운으로만 맞힌다
 #: (실측: verifying 창이 119·66·48ms 였고 약 20% 확률로 놓쳤다). 시나리오 파일
 #: 주석에 측정값과 이유를 적어 뒀다.
-VERDICTS_FAIL_TWICE_SLOW = "scenarios/verdicts_fail_twice_slow.yaml"
+VERDICTS_FAIL_TWICE_SLOW = "legacy/scenarios/verdicts_fail_twice_slow.yaml"
 
 RECOVERY_TIMEOUT_S = 90.0
 

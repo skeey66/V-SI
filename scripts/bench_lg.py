@@ -1,7 +1,7 @@
 """Before/After 실측.
 
-    PYTHONPATH=packages:services python scripts/bench_lg.py planner --reps 2
-    PYTHONPATH=packages:services python scripts/bench_lg.py rag --reps 2
+    PYTHONPATH=backend:mcp_servers python scripts/bench_lg.py planner --reps 2
+    PYTHONPATH=backend:mcp_servers python scripts/bench_lg.py rag --reps 2
 
 같은 요구사항 묶음을 두 설정으로 돌려 완료율·회차·지연·토큰·비용을 비교한다.
 토큰은 LangChain 사용량 콜백으로 직접 센다(LangSmith 집계는 몇 초 늦게 반영된다).

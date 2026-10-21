@@ -1,6 +1,6 @@
 """V-SI LangGraph API (FastAPI).
 
-    PYTHONPATH=packages:services uvicorn lg_api.main:app --port 8200
+    PYTHONPATH=backend:mcp_servers uvicorn lg_api.main:app --port 8200
 
 `lifespan` 에서 설정·체크포인터·그래프를 **한 번만** 만들어 `app.state` 에 둔다.
 요청마다 그래프를 컴파일하거나 LLM 클라이언트를 새로 만들지 않는다.

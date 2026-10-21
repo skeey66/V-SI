@@ -14,7 +14,7 @@ from lg_agent.events import emit
 from lg_agent.nodes.common import run_agent
 from lg_agent.state import VsiState
 from lg_agent.prompts import PLANNER_TOOLS
-from llm_agent.roles import ROLES, system_prompt, task_prompt
+from lg_agent.roles import ROLES, system_prompt, task_prompt
 
 
 def make_planner(deps: Deps):

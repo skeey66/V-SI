@@ -6,13 +6,13 @@
 로 죽는다(mcp 2.x 에서 옮겨진 이름). 도구 서버를 1.x 로 내리면 이미 검증된
 서버 코드를 고쳐야 하므로, 클라이언트 쪽에 얇은 어댑터를 둔다.
 
-연결·스키마 정리·인자 주입은 기존 `llm_agent.mcp_client` 를 그대로 재사용한다:
+연결·스키마 정리·인자 주입은 `lg_agent.mcp_bridge`(이전 버전에서 가져온 코드)를 쓴다:
 - `tool_schemas` 가 모델에게 보여줄 스키마에서 `requirement_id` 를 지운다.
 - `ToolBridge` 가 호출 시 `requirement_id` 를 세션 값으로 덮어쓰고 허용 목록을
   검사한다. 모델은 다른 요구사항의 워크스페이스를 가리킬 방법이 없다.
 
 도구 오류는 예외가 아니라 `{"ok": False, ...}` 결과로 모델에게 돌아간다
-(`llm_agent/loop.py` 와 같은 원칙) — 모델이 보고 고칠 기회를 갖는다.
+(`legacy/packages/llm_agent/loop.py` 와 같은 원칙) — 모델이 보고 고칠 기회를 갖는다.
 """
 from __future__ import annotations
 
@@ -28,12 +28,12 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from lg_agent.events import emit
-from llm_agent.mcp_client import ToolBridge, ToolNotAllowed, tool_schemas
-from llm_agent.roles import ROLES
+from lg_agent.mcp_bridge import ToolBridge, ToolNotAllowed, tool_schemas
+from lg_agent.roles import ROLES
 
 MCP_CONNECT_TIMEOUT_S = 30.0
 #: 도구 호출 하나의 상한. 도구 서버의 서브프로세스 상한(60초)에 왕복 여유를 더했다
-#: (`llm_agent/loop.py` 의 `TOOL_CALL_CAP_S` 와 같은 근거).
+#: (`legacy/packages/llm_agent/loop.py` 의 `TOOL_CALL_CAP_S` 와 같은 근거).
 TOOL_CALL_CAP_S = 90.0
 
 

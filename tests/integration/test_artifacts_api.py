@@ -15,7 +15,7 @@ import pytest
 
 from tests.integration.harness import ORCHESTRATOR_URL, run_scenario
 
-SCENARIO = "scenarios/all_pass.yaml"
+SCENARIO = "legacy/scenarios/all_pass.yaml"
 
 
 @pytest.fixture(scope="module")

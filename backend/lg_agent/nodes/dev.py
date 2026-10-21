@@ -5,7 +5,7 @@ from lg_agent.deps import Deps
 from lg_agent.events import emit
 from lg_agent.nodes.common import run_agent
 from lg_agent.state import VsiState
-from llm_agent.roles import ROLES, system_prompt, task_prompt
+from lg_agent.roles import ROLES, system_prompt, task_prompt
 
 #: 반려가 있을 때 개발 프롬프트 끝에 붙인다. 지적들이 서로 부딪히는 경우(보안은
 #: md5 를 금지, 테스트는 md5 값을 기대)에 한쪽만 고쳐 진동하는 것을 막는다.

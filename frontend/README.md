@@ -1,4 +1,4 @@
-# V-SI Vue 프론트엔드 (web-vue)
+# V-SI 프론트엔드 (Vue 3)
 
 LangGraph 백엔드(`lg_api`)를 위한 Vue 3 화면입니다. API 계약은 `../docs/lg/api-contract.md` 를 따릅니다.
 

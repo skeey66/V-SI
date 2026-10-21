@@ -29,6 +29,8 @@ jobs:
         with: { python-version: "3.11" }
       - run: pip install -e ".[dev]"
       - run: pytest tests/orchestrator tests/agent_runtime tests/stub_agent -v
+      # LangGraph 버전 — 가짜 LLM 을 주입하므로 키·비용 없이 돈다.
+      - run: pytest tests/lg_agent tests/lg_api tests/knowledge_server -v
 
   integration:
     runs-on: ubuntu-latest
@@ -61,6 +63,17 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
       - run: npm ci
-        working-directory: web
+        working-directory: legacy/web
       - run: npm test
-        working-directory: web
+        working-directory: legacy/web
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: npm ci
+        working-directory: frontend
+      - run: npx vitest run
+        working-directory: frontend

@@ -1,4 +1,4 @@
-"""지식 MCP 서버(`services/knowledge_server`) 클라이언트 — 보안 조치 가이드 검색."""
+"""지식 MCP 서버(`mcp_servers/knowledge_server`) 클라이언트 — 보안 조치 가이드 검색."""
 from __future__ import annotations
 
 import asyncio

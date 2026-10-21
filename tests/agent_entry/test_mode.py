@@ -4,7 +4,7 @@ from agent_entry.main import UnknownMode, build_executor
 from llm_agent.executor import LlmExecutor
 from stub_agent.executor import StubExecutor
 
-KW = dict(scenario_path="scenarios/all_pass.yaml", ollama_url="http://x",
+KW = dict(scenario_path="legacy/scenarios/all_pass.yaml", ollama_url="http://x",
           model="qwen3:8b", mcp_url="http://y/mcp", session_maker=None)
 
 

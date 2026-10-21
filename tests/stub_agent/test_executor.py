@@ -2,7 +2,7 @@ import pytest
 from stub_agent.executor import StubExecutor, ARTIFACT_KIND, StubCrash
 from stub_agent.scenario import AgentScenario
 
-PATH = "scenarios/qa_fails_twice.yaml"
+PATH = "legacy/scenarios/qa_fails_twice.yaml"
 
 
 def test_artifact_kind_per_agent():
