@@ -37,6 +37,7 @@ class Settings:
     max_output_tokens: int
     checkpoint_url: str | None
     rag_enabled: bool
+    rag_stages: frozenset[str]
     knowledge_url: str
     langsmith_project: str
     tracing: bool
@@ -65,6 +66,11 @@ def load_settings(env_file: Path | None = None) -> Settings:
         max_output_tokens=int(os.environ.get("VSI_LG_MAX_OUTPUT_TOKENS", "2000")),
         checkpoint_url=os.environ.get("VSI_LG_CHECKPOINT_URL") or None,
         rag_enabled=os.environ.get("VSI_LG_RAG", "on").lower() not in ("off", "0", "false"),
+        # 기본값은 실측으로 이득이 확인된 세 단계. testdesign 은 완료율을 떨어뜨려 기본에서 뺐다
+        # (docs/lg/REPORT.md, README 2-3 참고). 관리자 화면에서 켤 수 있다.
+        rag_stages=frozenset(
+            s.strip() for s in os.environ.get("VSI_LG_RAG_STAGES", "securecoding,qa,security").split(",")
+            if s.strip()),
         knowledge_url=os.environ.get("VSI_KNOWLEDGE_URL", "http://localhost:8011").rstrip("/"),
         langsmith_project=project,
         tracing=tracing,

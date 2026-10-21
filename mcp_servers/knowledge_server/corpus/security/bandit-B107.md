@@ -1,0 +1,50 @@
+---
+id: bandit-B107
+title: bandit B107 hardcoded_password_default
+source: https://bandit.readthedocs.io/en/1.9.4/plugins/index.html
+license: Apache-2.0 (PyCQA bandit)
+keys: B107
+---
+**B107: Test for use of hard-coded password argument defaults**
+
+The use of hard-coded passwords increases the possibility of password
+guessing tremendously. This plugin test looks for all function definitions
+that specify a default string literal for some argument. It checks that
+the argument does not look like a password.
+
+Variables are considered to look like a password if they have match any one
+of:
+
+- "password"
+- "pass"
+- "passwd"
+- "pwd"
+- "secret"
+- "token"
+- "secrete"
+
+Note: this can be noisy and may generate false positives.  We do not
+report on None values which can be legitimately used as a default value,
+when initializing a function or class.
+
+**Config Options:**
+
+None
+
+:Example:
+
+```
+
+    >> Issue: [B107:hardcoded_password_default] Possible hardcoded
+    password: 'Admin'
+       Severity: Low   Confidence: Medium
+       CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+       Location: ./examples/hardcoded-passwords.py:1
+
+    1    def someFunction(user, password="Admin"):
+    2      print("Hi " + user)
+
+    - https://www.owasp.org/index.php/Use_of_hard-coded_password
+    - https://cwe.mitre.org/data/definitions/259.html
+
+    CWE information added

@@ -45,7 +45,7 @@ data: {"seq": 12, "type": "<type>", "ts": 1760000000.12, ...필드}
 | `node_end` | `node` (planner/gate/approval/dev/qa/security/judge), `status` (있으면) |
 | `gate` | `ok`, `detail` |
 | `verdict` | `agent`, `verdict`, `exit_code`, `summary`, `revision` |
-| `rag` | `agent`, `query`, `hits`: `[{"id","title","score"}]` |
+| `rag` | `agent`, `collection` (testdesign·securecoding·qa·security), `query`, `hits`: `[{"id","title","score","source"}]` — 어느 지식 묶음에서 무엇을 찾았는지 |
 | `interrupt` | `detail` — 사람 승인 필요 |
 | `resumed` | `approved` |
 | `done` | `status`, `revision`, `elapsed_s` |

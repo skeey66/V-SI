@@ -9,7 +9,15 @@ import SealStamp from '../components/SealStamp.vue'
 import { formatTime, formatSeconds, formatCost, formatNumber } from '../utils/format.js'
 
 const config = ref(null)
-const form = ref({ rag_enabled: false, max_revisions: 3 }) // 설정 편집용 사본
+const form = ref({ rag_enabled: false, rag_stages: [], max_revisions: 3 }) // 설정 편집용 사본
+
+// RAG 단계: 누가 언제 어떤 지식을 찾는가
+const RAG_STAGES = [
+  { id: 'testdesign', label: '테스트 설계', who: '기획 · 테스트 작성 전' },
+  { id: 'securecoding', label: '시큐어 코딩', who: '개발 · 구현 전' },
+  { id: 'qa', label: '테스트 실패 진단', who: 'QA · 불합격 후' },
+  { id: 'security', label: '보안 조치', who: '보안 · 불합격 후' },
+]
 const summary = ref(null)
 const runs = ref(null) // null = 아직 불러오는 중
 const feedback = ref(null) // 최근 검수 의견 (null = 불러오는 중)
@@ -35,7 +43,11 @@ async function loadAll() {
   await Promise.all([
     loadPart('config', async () => {
       config.value = await getConfig()
-      form.value = { rag_enabled: config.value.rag_enabled, max_revisions: config.value.max_revisions }
+      form.value = {
+        rag_enabled: config.value.rag_enabled,
+        rag_stages: [...(config.value.rag_stages || [])],
+        max_revisions: config.value.max_revisions,
+      }
     }),
     loadPart('summary', async () => (summary.value = await getSummary())),
     loadPart('runs', async () => (runs.value = await listRuns(50))),
@@ -54,6 +66,7 @@ async function saveConfig() {
   await loadPart('config', async () => {
     config.value = await updateConfig({
       rag_enabled: form.value.rag_enabled,
+      rag_stages: form.value.rag_stages,
       max_revisions: Number(form.value.max_revisions),
     })
     message.value = '설정을 저장했습니다.'
@@ -113,6 +126,14 @@ onMounted(loadAll)
         <a v-if="config.langsmith_url" :href="config.langsmith_url" target="_blank" rel="noopener">LangSmith 열기 ↗</a>
       </div>
       <label class="row"><input v-model="form.rag_enabled" type="checkbox" /> RAG(지식 검색) 사용</label>
+      <fieldset class="stages" :disabled="!form.rag_enabled">
+        <legend class="muted">검색 단계</legend>
+        <label v-for="st in RAG_STAGES" :key="st.id" class="stage">
+          <input v-model="form.rag_stages" type="checkbox" :value="st.id" />
+          <b>{{ st.label }}</b> <span class="muted">{{ st.who }}</span>
+        </label>
+        <p class="muted note">테스트 설계는 테스트를 더 까다롭게 만들어 완료율이 떨어지는 것으로 측정돼 기본에서 꺼 두었습니다.</p>
+      </fieldset>
       <label class="row">
         최대 수정 회차
         <input v-model="form.max_revisions" type="number" min="1" max="10" style="width: 80px" />
@@ -246,6 +267,12 @@ onMounted(loadAll)
 
 <style scoped>
 .config { display: flex; flex-direction: column; gap: 10px; }
+.stages { border: 1px solid var(--rule); border-radius: 6px; padding: 10px 14px; margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px; }
+.stages legend { padding: 0 4px; font-size: 12.5px; }
+.stages:disabled { opacity: 0.5; }
+.stage { display: flex; align-items: baseline; gap: 6px; }
+.stage .muted { font-size: 12.5px; }
+.stages .note { grid-column: 1 / -1; margin: 4px 0 0; font-size: 12px; }
 .config a { margin-left: 8px; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
 .tile { border: 1px solid var(--border); border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 4px; }

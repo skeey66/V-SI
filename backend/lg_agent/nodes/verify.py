@@ -12,8 +12,9 @@ from __future__ import annotations
 
 from lg_agent.deps import Deps
 from lg_agent.events import emit
-from lg_agent.knowledge import bandit_query
+from lg_agent.knowledge import bandit_query, pytest_query
 from lg_agent.nodes.common import run_agent
+from lg_agent.rag import as_context, retrieve
 from lg_agent.state import Verdict, VsiState
 from lg_agent.roles import ROLES, system_prompt
 
@@ -46,7 +47,7 @@ def make_verifier(deps: Deps, role: str):
                     tool=verdict_tool, code=exit_code, title=state["title"], detail=detail,
                 )
                 if guides:
-                    prompt += "\n\n--- 사내 보안 조치 가이드 (이 방법대로 고치라고 안내해라) ---\n" + guides
+                    prompt += "\n\n--- 조치 가이드 (이 방법대로 고치라고 안내해라) ---\n" + guides
                 summary = await run_agent(
                     deps, name=role, system_prompt=system_prompt(ROLES[role]),
                     user_prompt=prompt, tools=read_only,
@@ -68,20 +69,11 @@ def make_verifier(deps: Deps, role: str):
 
 
 async def _retrieve_guides(deps: Deps, role: str, detail: str) -> str:
-    """보안 FAIL 일 때 bandit 출력으로 조치 가이드를 검색한다 (RAG).
+    """진단 RAG: FAIL 출력으로 조치 가이드를 검색한다.
 
-    검색 실패는 판정에 영향을 주지 않는다 — 가이드 없이 기존처럼 설명만 한다.
+    QA 는 pytest 실패 줄(예외 이름, `E   assert ...`)로 `qa` 묶음을, 보안은 bandit 규칙
+    ID·문장으로 `security` 묶음을 찾는다. 검색 실패는 판정에 영향을 주지 않는다.
     """
-    if role != "security" or deps.knowledge is None or not deps.options.rag_enabled:
-        return ""
-    query = bandit_query(detail)
-    try:
-        hits = await deps.knowledge(query, 3)
-    except Exception as exc:
-        emit({"type": "rag", "agent": role, "query": query, "hits": [], "error": str(exc)})
-        return ""
-    emit({
-        "type": "rag", "agent": role, "query": query,
-        "hits": [{"id": h["id"], "title": h["title"], "score": h["score"]} for h in hits],
-    })
-    return "\n\n".join(h["text"] for h in hits)
+    stage, query = ("qa", pytest_query(detail)) if role == "qa" else ("security", bandit_query(detail))
+    hits = await retrieve(deps, agent=role, stage=stage, query=query)
+    return as_context(hits)

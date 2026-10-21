@@ -1,0 +1,47 @@
+---
+id: bandit-B106
+title: bandit B106 hardcoded_password_funcarg
+source: https://bandit.readthedocs.io/en/1.9.4/plugins/index.html
+license: Apache-2.0 (PyCQA bandit)
+keys: B106
+---
+**B106: Test for use of hard-coded password function arguments**
+
+The use of hard-coded passwords increases the possibility of password
+guessing tremendously. This plugin test looks for all function calls being
+passed a keyword argument that is a string literal. It checks that the
+assigned local variable does not look like a password.
+
+Variables are considered to look like a password if they have match any one
+of:
+
+- "password"
+- "pass"
+- "passwd"
+- "pwd"
+- "secret"
+- "token"
+- "secrete"
+
+Note: this can be noisy and may generate false positives.
+
+**Config Options:**
+
+None
+
+:Example:
+
+```
+
+    >> Issue: [B106:hardcoded_password_funcarg] Possible hardcoded
+    password: 'blerg'
+       Severity: Low   Confidence: Medium
+       CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+       Location: ./examples/hardcoded-passwords.py:16
+    15
+    16    doLogin(password="blerg")
+
+    - https://www.owasp.org/index.php/Use_of_hard-coded_password
+    - https://cwe.mitre.org/data/definitions/259.html
+
+    CWE information added

@@ -170,3 +170,11 @@ async def test_restart_restores_ledger_from_checkpoints(client):
     assert run.title == "완료될 작업" and run.status == "accepted"
     assert [e["type"] for e in run.events] == ["run_started", "done"]
     assert run.finished
+
+
+async def test_config_patch_selects_rag_stages(client):
+    _setup({"check_acceptance_tests": [0], "run_tests": [0], "run_security_scan": [0]})
+    cfg = (await client.put("/api/admin/config", json={"rag_stages": ["qa", "security"]})).json()
+    assert cfg["rag_stages"] == ["qa", "security"]
+    assert app.state.deps.options.rag_stages == frozenset({"qa", "security"})
+    assert (await client.put("/api/admin/config", json={"rag_stages": ["guess"]})).status_code == 422

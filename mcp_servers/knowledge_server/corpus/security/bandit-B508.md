@@ -1,0 +1,32 @@
+---
+id: bandit-B508
+title: bandit B508 snmp_insecure_version
+source: https://bandit.readthedocs.io/en/1.9.4/plugins/index.html
+license: Apache-2.0 (PyCQA bandit)
+keys: B508
+---
+**B508: Checking for insecure SNMP versions**
+
+This test is for checking for the usage of insecure SNMP version like
+  v1, v2c
+
+Please update your code to use more secure versions of SNMP.
+
+:Example:
+
+```
+
+    >> Issue: [B508:snmp_insecure_version_check] The use of SNMPv1 and
+       SNMPv2 is insecure. You should use SNMPv3 if able.
+       Severity: Medium Confidence: High
+       CWE: CWE-319 (https://cwe.mitre.org/data/definitions/319.html)
+       Location: examples/snmp.py:4:4
+       More Info: https://bandit.readthedocs.io/en/latest/plugins/b508_snmp_insecure_version_check.html
+    3   # SHOULD FAIL
+    4   a = CommunityData('public', mpModel=0)
+    5   # SHOULD FAIL
+
+ - http://snmplabs.com/pysnmp/examples/hlapi/asyncore/sync/manager/cmdgen/snmp-versions.html
+ - https://cwe.mitre.org/data/definitions/319.html
+
+    CWE information added

@@ -1,4 +1,18 @@
 <script setup>
+// RAG 지식 묶음 이름 (mcp_servers/knowledge_server/index.py 의 COLLECTIONS)
+const COLLECTION_LABELS = {
+  testdesign: '테스트 설계', securecoding: '시큐어 코딩', qa: '테스트 실패 진단', security: '보안 조치',
+}
+// 출처 URL → 짧은 이름
+function sourceLabel(src) {
+  if (!src || src.startsWith('V-SI')) return '사내 가이드'
+  if (src.includes('OWASP')) return 'OWASP'
+  if (src.includes('pytest')) return 'pytest 문서'
+  if (src.includes('cpython')) return 'Python 문서'
+  if (src.includes('bandit')) return 'bandit 문서'
+  if (src.includes('cwe.mitre')) return 'MITRE CWE'
+  return src.split('/')[2] || src
+}
 import { ref, watch, nextTick } from 'vue'
 import { AGENT_LABELS, formatTime, formatSeconds, STATUS_LABELS } from '../utils/format.js'
 
@@ -76,11 +90,11 @@ watch(
           </details>
 
           <details v-else-if="ev.type === 'rag'">
-            <summary>📚 {{ label(ev.agent) }} 지식 검색: {{ ev.hits?.length || 0 }}건</summary>
+            <summary>📚 {{ label(ev.agent) }} 지식 검색 · {{ COLLECTION_LABELS[ev.collection] || ev.collection || '보안 조치' }}: {{ ev.hits?.length || 0 }}건</summary>
             <div class="muted">질의: {{ ev.query }}</div>
             <ul>
               <li v-for="h in ev.hits" :key="h.id">
-                {{ h.title }} <span class="muted">({{ Number(h.score).toFixed(3) }})</span>
+                {{ h.title }} <span class="muted">({{ Number(h.score).toFixed(2) }} · {{ sourceLabel(h.source) }})</span>
               </li>
             </ul>
           </details>

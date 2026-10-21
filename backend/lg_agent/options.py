@@ -5,13 +5,17 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
 class RuntimeOptions:
     max_revisions: int = 3
     rag_enabled: bool = True
+    #: RAG 를 쓸 단계 (`lg_agent.rag.STAGES`). Before/After 측정에서 단계별로 끈다.
+    rag_stages: frozenset[str] = field(
+        default_factory=lambda: frozenset({"testdesign", "securecoding", "qa", "security"}))
+    # (실행 환경의 기본값은 settings.VSI_LG_RAG_STAGES — 단위 테스트는 네 단계 모두 켠 상태로 검사한다)
     #: Before/After 측정용. "legacy" 면 기존 `llm_agent.roles` 의 기획 프롬프트와
     #: 도구(`check_acceptance_tests` 포함)를 그대로 쓴다.
     planner_variant: str = "v2"

@@ -120,23 +120,71 @@ def test_judge_missing_verdict_is_not_accepted():
     assert out["status"] == "remediating"
 
 
-async def test_security_failure_attaches_retrieved_guide_to_feedback():
+def recording_retriever(calls: list, text_by_collection: dict[str, str]):
+    async def search(query, k, collection="security"):
+        calls.append((collection, query))
+        text = text_by_collection.get(collection)
+        return [{"id": f"{collection}-1", "title": collection, "section": "개요", "score": 0.9,
+                 "source": "test", "text": text}] if text else []
+    return search
+
+
+async def test_rag_runs_at_each_stage_and_reaches_prompts():
+    """예방(기획·1회차 개발) + 진단(보안 FAIL) RAG 가 차례로 돌고 결과가 프롬프트에 들어간다."""
     from dataclasses import replace
 
-    queries = []
-
-    async def fake_retriever(query, k):
-        queries.append(query)
-        return [{"id": "B602", "title": "shell=True", "score": 1.0, "text": "shell=True 를 빼라"}]
-
+    calls = []
+    retriever = recording_retriever(calls, {
+        "testdesign": "기준값 바로 아래·같음·바로 위를 테스트하라",
+        "securecoding": "secrets 모듈을 써라",
+        "security": "shell=True 를 빼라",
+    })
     llm = make_llm()
     tools = FakeTools({"check_acceptance_tests": [0], "run_tests": [0], "run_security_scan": [1, 0]})
-    deps = replace(deps_with(tools, llm), knowledge=fake_retriever)
-    final = await build_graph(deps).ainvoke(initial_state("REQ-6", "x"), CFG)
+    deps = replace(deps_with(tools, llm), knowledge=retriever)
+    final = await build_graph(deps).ainvoke(initial_state("REQ-6", "5만원 이상이면 할인"), CFG)
     assert final["status"] == "accepted" and final["revision"] == 2
-    assert len(queries) == 1
-    dev_prompt = [p for p in llm.prompts if p.startswith("요구사항:") and "반려" in p][0]
-    assert "shell=True 를 빼라" in dev_prompt
+
+    # 기획(testdesign) → 1회차 개발(securecoding) → 보안 FAIL(security). 2회차 개발은 예방 검색을 안 한다.
+    assert [c for c, _ in calls] == ["testdesign", "securecoding", "security"]
+    assert calls[0][1] == "5만원 이상이면 할인"
+    joined = "\n".join(llm.prompts)
+    assert "기준값 바로 아래" in joined           # 기획 프롬프트
+    assert "secrets 모듈을 써라" in joined         # 1회차 개발 프롬프트
+    dev2 = [p for p in llm.prompts if p.startswith("요구사항:") and "반려" in p][0]
+    assert "shell=True 를 빼라" in dev2            # 보안 가이드가 2회차 개발 피드백에
+
+
+async def test_qa_failure_searches_qa_collection_with_pytest_lines():
+    from dataclasses import replace
+
+    from lg_agent.options import RuntimeOptions
+
+    calls = []
+    retriever = recording_retriever(calls, {"qa": "테스트의 import 이름 그대로 파일을 만들어라"})
+    llm = make_llm()
+    tools = FakeTools({"check_acceptance_tests": [0], "run_tests": [1, 0], "run_security_scan": [0]})
+    deps = replace(deps_with(tools, llm), knowledge=retriever,
+                   options=RuntimeOptions(rag_stages=frozenset({"qa"})))
+    await build_graph(deps).ainvoke(initial_state("REQ-8", "x"), CFG)
+    assert [c for c, _ in calls] == ["qa"]  # 다른 단계는 꺼져 있다
+    dev2 = [p for p in llm.prompts if p.startswith("요구사항:") and "반려" in p][0]
+    assert "import 이름 그대로" in dev2
+
+
+def test_pytest_query_keeps_only_failure_lines():
+    from lg_agent.knowledge import pytest_query
+
+    detail = (
+        "F.                                                                       [100%]\n"
+        "    def test_total():\n"
+        ">       assert total([1, 2]) == 3\n"
+        "E       assert 4 == 3\n"
+        "ModuleNotFoundError: No module named 'cart'\n"
+        "1 failed, 1 passed in 0.01s\n"
+    )
+    assert pytest_query(detail).splitlines() == [
+        "E       assert 4 == 3", "ModuleNotFoundError: No module named 'cart'"]
 
 
 async def test_rag_disabled_skips_retrieval():
@@ -146,7 +194,7 @@ async def test_rag_disabled_skips_retrieval():
 
     called = []
 
-    async def fake_retriever(query, k):
+    async def fake_retriever(query, k, collection="security"):
         called.append(query)
         return []
 

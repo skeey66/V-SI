@@ -51,6 +51,7 @@ def build_deps(settings: Settings, *, langsmith_client=None) -> Deps:
         agent_budget_s=settings.agent_budget_s,
         max_turns=settings.max_turns,
         prompts=PromptStore(langsmith_client),
-        options=RuntimeOptions(max_revisions=settings.max_revisions, rag_enabled=settings.rag_enabled),
+        options=RuntimeOptions(max_revisions=settings.max_revisions, rag_enabled=settings.rag_enabled,
+                               rag_stages=settings.rag_stages),
         knowledge=mcp_retriever(settings.knowledge_url),
     )

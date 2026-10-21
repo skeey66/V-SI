@@ -18,6 +18,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel
 
 from lg_agent.prompts import PLANNER_PROMPT_NAME, PLANNER_SYSTEM
+from lg_agent.rag import STAGES
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -26,6 +27,7 @@ ROOT_FILTER = 'eq(name, "vsi-graph")'
 
 class ConfigPatch(BaseModel):
     rag_enabled: bool | None = None
+    rag_stages: list[str] | None = None
     max_revisions: int | None = None
 
 
@@ -49,6 +51,7 @@ def _config(request: Request) -> dict:
     opts = request.app.state.deps.options
     return {
         "model": s.model, "max_revisions": opts.max_revisions, "rag_enabled": opts.rag_enabled,
+        "rag_stages": sorted(opts.rag_stages), "rag_stage_options": list(STAGES),
         "langsmith_project": s.langsmith_project,
         "langsmith_url": "https://smith.langchain.com",
     }
@@ -64,6 +67,11 @@ async def put_config(patch: ConfigPatch, request: Request) -> dict:
     opts = request.app.state.deps.options
     if patch.rag_enabled is not None:
         opts.rag_enabled = patch.rag_enabled
+    if patch.rag_stages is not None:
+        unknown = set(patch.rag_stages) - set(STAGES)
+        if unknown:
+            raise HTTPException(422, f"알 수 없는 RAG 단계: {sorted(unknown)}")
+        opts.rag_stages = frozenset(patch.rag_stages)
     if patch.max_revisions is not None:
         if not 1 <= patch.max_revisions <= 5:
             raise HTTPException(422, "max_revisions 는 1~5 사이다")
