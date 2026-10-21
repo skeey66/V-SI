@@ -4,9 +4,12 @@
 곳이라 인터넷이 없는 `internal` 망에 있다. 이 서버는 질의 임베딩을 만들려고
 OpenAI 를 불러야 하므로 같은 컨테이너에 둘 수 없다.
 
-MCP 의 두 가지 기능을 쓴다.
+MCP 의 세 가지 기능을 모두 쓴다.
 - tool `search_security_guide(query, k)` — 의미 검색 (모델·노드가 호출)
 - resource `guide://security/{rule_id}` — 규칙 ID 로 원문 직접 조회 (계산 없음)
+- prompt `security_fix_request(bandit_output)` — bandit 출력에 맞는 가이드를 붙인
+  "이렇게 고쳐라" 요청문을 서버가 조립해 준다. 이 서비스의 그래프는 tool 을 쓰지만,
+  Claude Desktop 같은 다른 MCP 클라이언트도 같은 지식을 프롬프트로 바로 가져다 쓸 수 있다.
 """
 from __future__ import annotations
 
@@ -43,8 +46,20 @@ def guide(rule_id: str) -> str:
     return doc.text if doc else f"가이드 없음: {rule_id}"
 
 
+def security_fix_request(bandit_output: str) -> str:
+    """bandit 출력을 받아, 문제별 조치 가이드를 붙인 수정 요청 프롬프트를 만든다."""
+    hits = INDEX.search(bandit_output, k=3)
+    guides = "\n\n".join(h["text"] for h in hits) or "(맞는 가이드를 찾지 못했다)"
+    return (
+        "아래 bandit 보안 검사 결과를 고쳐라. 사내 조치 가이드의 방법을 따르고, "
+        "인수 테스트가 기대하는 동작은 바꾸지 마라.\n\n"
+        f"--- bandit 출력 ---\n{bandit_output}\n\n--- 사내 조치 가이드 ---\n{guides}"
+    )
+
+
 server.add_tool(search_security_guide, name="search_security_guide")
 server.resource("guide://security/{rule_id}")(guide)
+server.prompt(name="security_fix_request", description="bandit 결과에 맞는 조치 가이드를 붙인 수정 요청문")(security_fix_request)
 
 _ALLOWED = [h.strip() for h in os.environ.get(
     "VSI_KNOWLEDGE_ALLOWED_HOSTS", "knowledge:8000,localhost:8011,127.0.0.1:8011").split(",")]
