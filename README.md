@@ -11,7 +11,8 @@
 - **실시간 스트리밍** — 에이전트 진행 상황과 LLM 출력을 SSE 로 화면에 보여줍니다
 - **3D 사무실** — 에이전트가 일하고, 서류를 들고 다음 팀에게 걸어가고, 반려되면 빨간 서류를 들고 돌아옵니다 (three.js, 다시 보기 지원)
 - **보안 RAG** — 보안 검사에 걸리면 조치 가이드를 검색해 개발 에이전트에게 전달합니다
-- **관리자 대시보드** — LangSmith 기반 실행 통계·비용·피드백, 프롬프트 버전 관리
+- **검수 확인** — 결과물을 승인하거나 사유를 골라 보완을 요청하면 검수 도장으로 남고, LangSmith 피드백으로 기록됩니다
+- **관리자 대시보드** — LangSmith 기반 실행 통계·비용, 검수 의견 모아 보기, 프롬프트 버전 관리
 
 ## 아키텍처
 
@@ -56,9 +57,9 @@ docker compose --profile lg up -d --build postgres workspace knowledge backend f
 
 ## 화면
 
-| 실행 상세 | 관리자 (LangSmith) |
+| 납품 검수서 · 검수 도장 | 관리자 (LangSmith) |
 |---|---|
-| ![](docs/lg/img/run-detail.png) | ![](docs/lg/img/admin.png) |
+| ![](docs/lg/img/review.png) | ![](docs/lg/img/admin.png) |
 
 ## 결과
 

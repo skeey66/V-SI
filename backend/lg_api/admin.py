@@ -148,6 +148,41 @@ async def summary(request: Request, days: int = 7) -> dict:
     }
 
 
+def feedback_row(fb) -> dict:
+    """LangSmith 피드백 하나 → 화면용 dict (점수 · 보완 사유 · 의견)."""
+    value = fb.value if isinstance(fb.value, dict) else {}
+    return {
+        "score": fb.score, "reasons": value.get("reasons", []), "comment": fb.comment,
+        "created_at": fb.created_at.timestamp() if fb.created_at else None,
+    }
+
+
+@router.get("/feedback")
+async def feedback_list(request: Request, limit: int = 30) -> list[dict]:
+    """최근 검수 의견. 어느 요구사항에 누가 어떤 사유로 보완을 요청했는지 본다."""
+    client = _client(request)
+    project = request.app.state.settings.langsmith_project
+
+    def load():
+        runs = {str(r.id): r for r in _root_runs(client, project, 100)}
+        if not runs:
+            return []
+        items = list(client.list_feedback(run_ids=list(runs), feedback_key=["user_score"]))
+        items.sort(key=lambda f: f.created_at, reverse=True)
+        out = []
+        for fb in items[:limit]:
+            run = runs.get(str(fb.run_id))
+            meta = (run.metadata or {}) if run else {}
+            out.append({
+                **feedback_row(fb), "run_id": str(fb.run_id),
+                "requirement_id": meta.get("requirement_id"), "title": meta.get("title"),
+                "url": run.url if run else None,
+            })
+        return out
+
+    return await asyncio.to_thread(load)
+
+
 @router.get("/prompts/planner")
 async def planner_prompt(request: Request) -> dict:
     client = _client(request)

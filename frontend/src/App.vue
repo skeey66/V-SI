@@ -4,9 +4,9 @@ import { RouterLink, RouterView } from 'vue-router'
 
 <template>
   <header class="topbar">
-    <RouterLink to="/" class="brand">V-SI <small>가상 SI 회사</small></RouterLink>
+    <RouterLink to="/" class="brand"><b>V-SI</b><small>가상 SI 회사</small></RouterLink>
     <nav>
-      <RouterLink to="/">요청</RouterLink>
+      <RouterLink to="/">작업 요청</RouterLink>
       <RouterLink to="/admin">관리자</RouterLink>
     </nav>
   </header>

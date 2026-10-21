@@ -14,7 +14,8 @@
 | POST | `/api/requirements/{id}/resume` | | 202 `{"ok": true, "next": [노드]}` — API 가 죽어 멈춘 실행을 Postgres 체크포인트에서 이어감 |
 | GET | `/api/requirements/{id}/files` | | `[{"path": str}]` |
 | GET | `/api/requirements/{id}/files/{path}` | | `{"path", "content"}` |
-| POST | `/api/requirements/{id}/feedback` | `{"score": 1 or 0, "comment": str?}` | `{"ok": true}` — LangSmith 피드백으로 기록 |
+| POST | `/api/requirements/{id}/feedback` | `{"score": 1 or 0, "reasons": [str]?, "comment": str?}` — 1 = 승인, 0 = 보완 요청. `reasons` 는 `요구사항과 다름`·`테스트 부족`·`코드 품질`·`보안 우려`·`너무 느림` 중에서 | 저장된 검수 의견 `{"score","reasons","comment","created_at"}` — LangSmith 피드백(key=`user_score`)으로 기록 |
+| GET | `/api/requirements/{id}/feedback` | | `{"feedback": {...} or null}` — 이미 남긴 검수 의견 |
 
 `Verdict = {"agent","verdict":"PASS"|"FAIL","exit_code","summary","revision"}`
 
@@ -57,6 +58,7 @@ data: {"seq": 12, "type": "<type>", "ts": 1760000000.12, ...필드}
 | GET | `/api/admin/config` | `{"model","max_revisions","rag_enabled","langsmith_project","langsmith_url"}` |
 | PUT | `/api/admin/config` | 요청 `{"rag_enabled"?: bool, "max_revisions"?: int}` → 갱신된 config |
 | GET | `/api/admin/summary` | `{"runs","success_rate","avg_latency_s","p95_latency_s","total_tokens","total_cost","avg_cost","by_status":{status: n},"feedback":{"up","down"}}` |
+| GET | `/api/admin/feedback?limit=30` | `[{"score","reasons","comment","created_at","run_id","requirement_id","title","url"}]` 최신순 |
 | GET | `/api/admin/runs?limit=50` | `[{"run_id","requirement_id","title","status","error","start_time","latency_s","total_tokens","total_cost","url","feedback_score"}]` |
 | GET | `/api/admin/prompts/planner` | `{"name","active_commit": str|null,"commits":[{"commit_hash","created_at","preview","template"}],"local_default": str}` |
 | POST | `/api/admin/prompts/planner` | 요청 `{"template": str}` → `{"commit_hash"}` (Prompt Hub 에 새 버전 push) |

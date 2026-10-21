@@ -10,6 +10,7 @@ export const STATUS_LABELS = {
   accepted: '완료',
   escalated: '에스컬레이션',
   error: '오류',
+  pending: '중단됨', // LangSmith: 끝나지 않은 채 멈춘 실행 (예: 서버가 죽음)
 }
 
 // 더 이상 진행되지 않는 상태

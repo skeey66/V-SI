@@ -125,6 +125,7 @@ function onAnswered(approved) {
 }
 
 const verdictList = computed(() => Object.values(detail.value?.verdicts || {}))
+const traceUrl = computed(() => detail.value?.langsmith_urls?.at(-1) || '')
 </script>
 
 <template>
@@ -164,36 +165,35 @@ const verdictList = computed(() => Object.values(detail.value?.verdicts || {}))
     </section>
   </div>
 
-  <template v-if="finished">
-    <section class="card">
-      <h2>판정 요약</h2>
-      <p v-if="verdictList.length === 0" class="muted">판정 없음</p>
-      <div v-for="v in verdictList" :key="v.agent" class="verdict">
-        <b>{{ AGENT_LABELS[v.agent] || v.agent }}</b>
-        <span :class="v.verdict === 'PASS' ? 'pass' : 'fail'">{{ v.verdict }}</span>
-        <span class="muted">exit {{ v.exit_code }} · {{ v.revision }}회차</span>
+  <!-- 끝나면: 납품 검수서 (판정 · 결과물 · 검수 확인) -->
+  <section v-if="finished" class="card deliverable">
+    <header class="deliverable-head">
+      <h2>납품 검수서</h2>
+      <a v-if="traceUrl" :href="traceUrl" target="_blank" rel="noopener" class="trace">실행 기록 보기 (LangSmith)</a>
+    </header>
+
+    <div class="checks">
+      <p v-if="verdictList.length === 0" class="muted">자동 검사 결과가 없습니다.</p>
+      <details v-for="v in verdictList" :key="v.agent" class="check" :open="v.verdict !== 'PASS'">
+        <summary>
+          <span class="mark" :class="v.verdict === 'PASS' ? 'ok' : 'ng'">{{ v.verdict === 'PASS' ? '통과' : '불합격' }}</span>
+          <b>{{ AGENT_LABELS[v.agent] || v.agent }} 검사</b>
+          <span class="muted">{{ v.agent === 'qa' ? 'pytest' : 'bandit' }} 종료코드 {{ v.exit_code }}</span>
+        </summary>
         <pre>{{ v.summary }}</pre>
+      </details>
+    </div>
+
+    <div class="deliver-grid">
+      <div class="deliver-files">
+        <h3>결과물</h3>
+        <FileViewer :requirement-id="id" />
       </div>
-    </section>
-
-    <section class="card">
-      <h2>결과물</h2>
-      <FileViewer :requirement-id="id" />
-    </section>
-
-    <section class="card">
-      <h2>이 결과가 어떠셨나요?</h2>
-      <FeedbackBox :requirement-id="id" />
-    </section>
-  </template>
-
-  <section v-if="detail?.langsmith_urls?.length" class="card">
-    <h2>LangSmith 트레이스</h2>
-    <ul>
-      <li v-for="(u, i) in detail.langsmith_urls" :key="u">
-        <a :href="u" target="_blank" rel="noopener">트레이스 {{ i + 1 }} ↗</a>
-      </li>
-    </ul>
+      <aside class="deliver-review">
+        <h3>검수 확인</h3>
+        <FeedbackBox :requirement-id="id" :trace-url="traceUrl" />
+      </aside>
+    </div>
   </section>
 </template>
 
@@ -202,9 +202,30 @@ const verdictList = computed(() => Object.values(detail.value?.verdicts || {}))
 .stream { margin-left: auto; font-size: 12px; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .grid .card { min-width: 0; }
-.verdict { margin-bottom: 10px; }
-.verdict b { margin-right: 6px; }
-.verdict pre { margin-top: 4px; }
+.deliverable { padding: 0; overflow: hidden; }
+.deliverable-head {
+  display: flex; align-items: baseline; gap: 12px; padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--rule);
+}
+.deliverable-head h2 { margin: 0; font-size: 18px; }
+.deliverable-head .trace { margin-left: auto; font-size: 13px; }
+.checks { padding: 8px 20px; border-bottom: 1px solid var(--rule); }
+.check { padding: 8px 0; }
+.check + .check { border-top: 1px dashed var(--rule); }
+.check summary { display: flex; align-items: center; gap: 10px; cursor: pointer; list-style: none; }
+.check summary::-webkit-details-marker { display: none; }
+.check pre { margin-top: 8px; max-height: 260px; }
+.mark { font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 4px; border: 1px solid; }
+.mark.ok { color: var(--pass); border-color: #b9dcc8; background: var(--pass-weak); }
+.mark.ng { color: var(--seal); border-color: #efc4bf; background: var(--seal-weak); }
+.deliver-grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; }
+.deliver-files { padding: 18px 20px 20px; min-width: 0; }
+.deliver-review { padding: 18px 20px 20px; border-left: 1px solid var(--rule); background: var(--paper-2); }
+.deliver-files h3, .deliver-review h3 { margin-bottom: 10px; }
+@media (max-width: 1000px) {
+  .deliver-grid { grid-template-columns: 1fr; }
+  .deliver-review { border-left: 0; border-top: 1px solid var(--rule); }
+}
 @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
 .office-card { display: flex; flex-direction: column; gap: 16px; }
 </style>

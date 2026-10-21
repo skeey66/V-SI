@@ -40,13 +40,15 @@ export const listFiles = (id) => request('GET', `/api/requirements/${enc(id)}/fi
 // 파일 경로는 "src/cart.py" 처럼 / 를 포함하므로, 각 조각만 인코딩한다
 export const getFile = (id, path) =>
   request('GET', `/api/requirements/${enc(id)}/files/${path.split('/').map(enc).join('/')}`)
-export const sendFeedback = (id, score, comment) =>
-  request('POST', `/api/requirements/${enc(id)}/feedback`, comment ? { score, comment } : { score })
+export const sendFeedback = (id, { score, reasons = [], comment = '' }) =>
+  request('POST', `/api/requirements/${enc(id)}/feedback`, { score, reasons, comment })
+export const getFeedback = (id) => request('GET', `/api/requirements/${enc(id)}/feedback`)
 
 // ---- 관리자 ----
 export const getConfig = () => request('GET', '/api/admin/config')
 export const updateConfig = (patch) => request('PUT', '/api/admin/config', patch)
 export const getSummary = () => request('GET', '/api/admin/summary')
+export const listFeedback = (limit = 30) => request('GET', `/api/admin/feedback?limit=${limit}`)
 export const listRuns = (limit = 50) => request('GET', `/api/admin/runs?limit=${limit}`)
 export const getPrompt = () => request('GET', '/api/admin/prompts/planner')
 export const pushPrompt = (template) => request('POST', '/api/admin/prompts/planner', { template })

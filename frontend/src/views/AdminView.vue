@@ -1,16 +1,18 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import {
-  getConfig, updateConfig, getSummary, listRuns,
+  getConfig, updateConfig, getSummary, listRuns, listFeedback,
   getPrompt, pushPrompt, activatePrompt,
 } from '../api/client.js'
 import StatusBadge from '../components/StatusBadge.vue'
+import SealStamp from '../components/SealStamp.vue'
 import { formatTime, formatSeconds, formatCost, formatNumber } from '../utils/format.js'
 
 const config = ref(null)
 const form = ref({ rag_enabled: false, max_revisions: 3 }) // 설정 편집용 사본
 const summary = ref(null)
-const runs = ref([])
+const runs = ref(null) // null = 아직 불러오는 중
+const feedback = ref(null) // 최근 검수 의견 (null = 불러오는 중)
 const prompt = ref(null)
 const template = ref('') // 새 프롬프트 버전 입력란
 const errors = ref({}) // 영역별 오류 메시지 { config: '...', ... }
@@ -37,6 +39,7 @@ async function loadAll() {
     }),
     loadPart('summary', async () => (summary.value = await getSummary())),
     loadPart('runs', async () => (runs.value = await listRuns(50))),
+    loadPart('feedback', async () => (feedback.value = await listFeedback(30))),
     loadPart('prompt', loadPrompt),
   ])
   loading.value = false
@@ -87,7 +90,7 @@ function percent(rate) {
   return `${p.toFixed(1)}%`
 }
 
-const feedbackIcon = (score) => (score === 1 ? '👍' : score === 0 ? '👎' : '-')
+const feedbackLabel = (score) => (score === 1 ? '승인' : score === 0 ? '보완 요청' : '-')
 
 onMounted(loadAll)
 </script>
@@ -122,6 +125,7 @@ onMounted(loadAll)
   <section class="card">
     <h2>실행 요약</h2>
     <div v-if="errors.summary" class="error-box">{{ errors.summary }}</div>
+    <p v-if="!summary && !errors.summary" class="muted">LangSmith 에서 불러오는 중…</p>
     <div v-if="summary" class="tiles">
       <div class="tile"><span>실행 수</span><b>{{ formatNumber(summary.runs) }}</b></div>
       <div class="tile"><span>성공률</span><b>{{ percent(summary.success_rate) }}</b></div>
@@ -131,7 +135,7 @@ onMounted(loadAll)
       <div class="tile"><span>총 비용</span><b>{{ formatCost(summary.total_cost) }}</b></div>
       <div class="tile"><span>평균 비용</span><b>{{ formatCost(summary.avg_cost) }}</b></div>
       <div class="tile">
-        <span>피드백</span><b>👍 {{ summary.feedback?.up ?? 0 }} / 👎 {{ summary.feedback?.down ?? 0 }}</b>
+        <span>검수 승인 / 보완 요청</span><b>{{ summary.feedback?.up ?? 0 }} / {{ summary.feedback?.down ?? 0 }}</b>
       </div>
     </div>
     <div v-if="summary?.by_status" class="row" style="margin-top: 10px">
@@ -139,20 +143,48 @@ onMounted(loadAll)
     </div>
   </section>
 
+  <!-- 검수 의견 -->
+  <section class="card">
+    <h2>검수 의견</h2>
+    <div v-if="errors.feedback" class="error-box">{{ errors.feedback }}</div>
+    <p v-else-if="feedback === null" class="muted">LangSmith 에서 불러오는 중…</p>
+    <p v-else-if="feedback.length === 0" class="muted">
+      아직 검수 의견이 없습니다. 요구사항 화면 아래 "검수 확인"에서 남길 수 있습니다.
+    </p>
+    <ul v-else class="reviews">
+      <li v-for="f in feedback" :key="f.run_id + f.created_at" class="review">
+        <SealStamp :kind="f.score === 1 ? 'approve' : 'revise'" :size="44" />
+        <div class="review-body">
+          <div class="review-head">
+            <RouterLink v-if="f.requirement_id" :to="`/requirements/${f.requirement_id}`">{{ f.title || f.requirement_id }}</RouterLink>
+            <span v-else>{{ f.title || f.run_id }}</span>
+            <span class="muted">{{ formatTime(f.created_at) }}</span>
+            <a v-if="f.url" :href="f.url" target="_blank" rel="noopener" class="muted">트레이스</a>
+          </div>
+          <div v-if="f.reasons?.length" class="review-reasons">
+            <span v-for="r in f.reasons" :key="r">{{ r }}</span>
+          </div>
+          <p v-if="f.comment" class="review-comment">{{ f.comment }}</p>
+        </div>
+      </li>
+    </ul>
+  </section>
+
   <!-- 실행 목록 -->
   <section class="card">
     <h2>최근 실행 (LangSmith)</h2>
     <div v-if="errors.runs" class="error-box">{{ errors.runs }}</div>
-    <div class="scroll-x">
+    <div class="scroll-x runs-table">
       <table>
         <thead>
           <tr>
             <th>시작</th><th>요구사항</th><th>상태</th><th>지연</th>
-            <th>토큰</th><th>비용</th><th>피드백</th><th>트레이스</th>
+            <th>토큰</th><th>비용</th><th>검수</th><th>트레이스</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-if="runs.length === 0"><td colspan="8" class="muted">실행 기록이 없습니다.</td></tr>
+          <tr v-if="runs === null"><td colspan="8" class="muted">LangSmith 에서 불러오는 중…</td></tr>
+          <tr v-else-if="runs.length === 0"><td colspan="8" class="muted">아직 실행 기록이 없습니다. 작업 요청 화면에서 요구사항을 넣어 보세요.</td></tr>
           <tr v-for="r in runs" :key="r.run_id">
             <td class="muted">{{ formatTime(r.start_time) }}</td>
             <td>
@@ -163,7 +195,7 @@ onMounted(loadAll)
             <td>{{ formatSeconds(r.latency_s) }}</td>
             <td>{{ formatNumber(r.total_tokens) }}</td>
             <td>{{ formatCost(r.total_cost) }}</td>
-            <td>{{ feedbackIcon(r.feedback_score) }}</td>
+            <td :class="{ fail: r.feedback_score === 0, pass: r.feedback_score === 1 }">{{ feedbackLabel(r.feedback_score) }}</td>
             <td><a v-if="r.url" :href="r.url" target="_blank" rel="noopener">열기 ↗</a></td>
           </tr>
         </tbody>
@@ -220,6 +252,21 @@ onMounted(loadAll)
 .tile span { color: var(--muted); font-size: 12px; }
 .tile b { font-size: 18px; }
 .scroll-x { overflow-x: auto; }
+/* 실행이 쌓여도 페이지가 끝없이 길어지지 않게 — 머리줄은 고정 */
+.runs-table { max-height: 520px; overflow-y: auto; border: 1px solid var(--rule); border-radius: 6px; }
+.runs-table th { position: sticky; top: 0; z-index: 1; }
 .preview { max-width: 480px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 tr.active { background: var(--ok-weak); }
+.reviews { list-style: none; margin: 0; padding: 0; }
+.review { display: flex; gap: 14px; align-items: flex-start; padding: 12px 0; }
+.review + .review { border-top: 1px solid var(--rule); }
+.review-body { min-width: 0; flex: 1; }
+.review-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.review-head a:first-child, .review-head span:first-child { font-weight: 600; }
+.review-head .muted { font-size: 12.5px; }
+.review-reasons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.review-reasons span {
+  font-size: 12px; padding: 1px 9px; border-radius: 999px; color: var(--seal); background: var(--seal-weak);
+}
+.review-comment { margin: 6px 0 0; white-space: pre-wrap; }
 </style>

@@ -34,6 +34,8 @@ class Run:
     events: list[dict] = field(default_factory=list)
     #: 이 요구사항의 LangSmith 루트 실행 ID (시작 1개 + 승인 재개마다 1개)
     run_ids: list[str] = field(default_factory=list)
+    #: 사용자가 남긴 검수 의견. LangSmith 가 원본이고 이건 화면용 사본이다.
+    feedback: dict | None = None
     task: asyncio.Task | None = None
     started: float = field(default_factory=time.monotonic)
     _changed: asyncio.Condition = field(default_factory=asyncio.Condition)

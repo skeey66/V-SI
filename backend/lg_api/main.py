@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from contextlib import asynccontextmanager
 
@@ -24,6 +25,7 @@ from lg_agent.deps import build_deps
 from lg_agent.graph import build_graph, create_checkpointer, initial_state
 from lg_agent.settings import load_settings
 from lg_api import admin
+from lg_api.admin import feedback_row
 from lg_api.runs import Run, RunRegistry, drive, graph_config
 
 
@@ -35,9 +37,14 @@ class Approval(BaseModel):
     approved: bool
 
 
+#: 보완 요청 사유로 고를 수 있는 값. 화면의 선택지와 같다.
+FEEDBACK_REASONS = ("요구사항과 다름", "테스트 부족", "코드 품질", "보안 우려", "너무 느림")
+
+
 class Feedback(BaseModel):
-    score: int = Field(ge=0, le=1)
-    comment: str | None = None
+    score: int = Field(ge=0, le=1)  # 1 = 승인, 0 = 보완 요청
+    reasons: list[str] = Field(default_factory=list, max_length=len(FEEDBACK_REASONS))
+    comment: str | None = Field(default=None, max_length=1000)
 
 
 @asynccontextmanager
@@ -211,15 +218,41 @@ async def file_content(requirement_id: str, path: str, request: Request) -> dict
 
 @app.post("/api/requirements/{requirement_id}/feedback")
 async def feedback(requirement_id: str, body: Feedback, request: Request) -> dict:
+    """검수 의견을 LangSmith 피드백으로 남긴다 (key=`user_score`).
+
+    점수는 `score`, 보완 요청 사유는 `value`, 자유 의견은 `comment` 에 담는다 —
+    LangSmith 화면과 관리자 화면에서 그대로 걸러 볼 수 있다.
+    """
     run = _run_or_404(request, requirement_id)
     client = request.app.state.langsmith
     if client is None or not run.run_ids:
         raise HTTPException(503, "LangSmith 에 기록할 수 없다")
+    unknown = [r for r in body.reasons if r not in FEEDBACK_REASONS]
+    if unknown:
+        raise HTTPException(422, f"알 수 없는 사유: {unknown}")
+    reasons = [] if body.score == 1 else body.reasons  # 승인에는 보완 사유가 없다
+    comment = (body.comment or "").strip() or None
     await asyncio.to_thread(
-        client.create_feedback, run.run_ids[0], key="user_score",
-        score=body.score, comment=body.comment,
+        client.create_feedback, run.run_ids[0], key="user_score", score=body.score,
+        value={"reasons": reasons} if reasons else None, comment=comment,
     )
-    return {"ok": True}
+    run.feedback = {"score": body.score, "reasons": reasons, "comment": comment, "created_at": time.time()}
+    return run.feedback
+
+
+@app.get("/api/requirements/{requirement_id}/feedback")
+async def get_feedback(requirement_id: str, request: Request) -> dict:
+    """이미 남긴 검수 의견. 새로고침해도 도장이 그대로 보이게 한다."""
+    run = _run_or_404(request, requirement_id)
+    client = request.app.state.langsmith
+    if run.feedback is None and client is not None and run.run_ids:
+        items = await asyncio.to_thread(
+            lambda: list(client.list_feedback(run_ids=run.run_ids, feedback_key=["user_score"]))
+        )
+        if items:
+            latest = max(items, key=lambda f: f.created_at)
+            run.feedback = feedback_row(latest)
+    return {"feedback": run.feedback}
 
 
 @app.get("/healthz")

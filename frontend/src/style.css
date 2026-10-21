@@ -1,81 +1,144 @@
-/* 전체 공통 스타일 (라이트 테마) */
+/* V-SI 화면 공통 스타일
+ *
+ * 콘셉트: 가상 SI 회사의 결재 서류. 회색 책상(배경) 위에 흰 서류(카드)가 놓이고,
+ * 사람의 판단(검수)은 인주색 도장으로 남는다. 색으로 강조하는 곳은 도장 하나뿐이고
+ * 나머지는 먹색 글씨와 볼펜 파랑으로 차분하게 둔다.
+ */
 :root {
-  --bg: #f5f6f8;
-  --card: #ffffff;
-  --text: #1f2430;
-  --muted: #6b7280;
-  --border: #e3e6eb;
-  --primary: #2f6fed;
-  --primary-weak: #e8efff;
-  --ok: #1f9d55;
-  --ok-weak: #e3f6eb;
-  --fail: #d64545;
-  --fail-weak: #fdeaea;
-  --warn: #c97a00;
-  --warn-weak: #fff3dc;
-  --radius: 8px;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* 색 */
+  --desk: #e6eaef;        /* 배경 — 사무실 책상 */
+  --paper: #ffffff;       /* 카드 — 서류 */
+  --paper-2: #f6f8fa;     /* 서류 안의 옅은 칸 */
+  --ink: #18212e;         /* 본문 — 먹 */
+  --ink-2: #566173;       /* 보조 글씨 */
+  --rule: #d5dbe3;        /* 괘선 */
+  --pen: #2747c9;         /* 볼펜 파랑 — 링크·주요 버튼 */
+  --pen-weak: #e8ecfb;
+  --seal: #c2352b;        /* 인주 — 도장, 실패 */
+  --seal-weak: #fbeae8;
+  --pass: #1d7a4c;
+  --pass-weak: #e3f2ea;
+  --hold: #9a5a00;
+  --hold-weak: #fbf0dc;
+
+  /* 글꼴 */
+  --font: 'IBM Plex Sans KR', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
+  --font-seal: 'Nanum Myeongjo', 'AppleMyungjo', serif;
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* 기존 컴포넌트가 쓰는 이름 → 새 토큰 */
+  --bg: var(--desk);
+  --card: var(--paper);
+  --text: var(--ink);
+  --muted: var(--ink-2);
+  --border: var(--rule);
+  --primary: var(--pen);
+  --primary-weak: var(--pen-weak);
+  --ok: var(--pass);
+  --ok-weak: var(--pass-weak);
+  --fail: var(--seal);
+  --fail-weak: var(--seal-weak);
+  --warn: var(--hold);
+  --warn-weak: var(--hold-weak);
+  --radius: 6px;
 }
 
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
+  background: var(--desk);
+  color: var(--ink);
+  font-family: var(--font);
   font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
 }
-a { color: var(--primary); text-decoration: none; }
-a:hover { text-decoration: underline; }
-h1, h2, h3 { margin: 0 0 12px; }
-h2 { font-size: 16px; }
+a { color: var(--pen); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+h1, h2, h3 { margin: 0 0 12px; line-height: 1.35; letter-spacing: -0.01em; }
+h1 { font-size: 22px; font-weight: 700; }
+h2 { font-size: 16px; font-weight: 600; }
+h3 { font-size: 14px; font-weight: 600; }
+p { margin: 0 0 8px; }
 
+:focus-visible { outline: 2px solid var(--pen); outline-offset: 2px; }
+
+/* ── 상단 ── */
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 24px; background: var(--card); border-bottom: 1px solid var(--border);
+  padding: 0 28px; height: 56px;
+  background: var(--paper); border-bottom: 1px solid var(--rule);
 }
-.topbar .brand { font-weight: 700; font-size: 18px; color: var(--text); }
-.topbar .brand small { font-weight: 400; color: var(--muted); font-size: 13px; }
-.topbar nav a { margin-left: 16px; color: var(--muted); }
-.topbar nav a.router-link-exact-active { color: var(--primary); font-weight: 600; }
+.topbar .brand { display: flex; align-items: baseline; gap: 10px; color: var(--ink); }
+.topbar .brand:hover { text-decoration: none; }
+.topbar .brand b { font-size: 18px; font-weight: 700; letter-spacing: -0.02em; }
+.topbar .brand small { color: var(--ink-2); font-size: 13px; }
+.topbar nav { display: flex; gap: 4px; height: 100%; }
+.topbar nav a {
+  display: flex; align-items: center; padding: 0 14px; color: var(--ink-2);
+  border-bottom: 2px solid transparent;
+}
+.topbar nav a:hover { color: var(--ink); text-decoration: none; }
+.topbar nav a.router-link-exact-active { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
 
-.container { max-width: 1280px; margin: 0 auto; padding: 20px 24px 60px; }
+.container { max-width: 1240px; margin: 0 auto; padding: 24px 28px 72px; }
 
+/* ── 서류(카드) ── */
 .card {
-  background: var(--card); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 16px; margin-bottom: 16px;
+  background: var(--paper); border: 1px solid var(--rule);
+  border-radius: var(--radius); padding: 20px; margin-bottom: 16px;
 }
+.card > h2:first-child { margin-bottom: 14px; }
 
+/* ── 버튼 ── */
 button {
-  font: inherit; cursor: pointer; padding: 6px 12px;
-  border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text);
+  font: inherit; cursor: pointer; padding: 7px 14px; line-height: 1.4;
+  border: 1px solid var(--rule); border-radius: 6px; background: var(--paper); color: var(--ink);
+  transition: border-color 120ms, background-color 120ms;
 }
-button:hover:not(:disabled) { border-color: var(--primary); }
-button:disabled { opacity: 0.5; cursor: not-allowed; }
-button.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
-button.danger { color: var(--fail); border-color: var(--fail); }
-button.small { padding: 2px 8px; font-size: 12px; }
+button:hover:not(:disabled) { border-color: var(--ink-2); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button.primary { background: var(--pen); color: #fff; border-color: var(--pen); font-weight: 600; }
+button.primary:hover:not(:disabled) { background: #1f3aa8; border-color: #1f3aa8; }
+button.danger { color: var(--seal); border-color: var(--seal); }
+button.small { padding: 3px 10px; font-size: 12px; }
 
 textarea, input[type='text'], input[type='number'] {
-  font: inherit; width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px;
+  font: inherit; width: 100%; padding: 9px 11px; color: var(--ink);
+  border: 1px solid var(--rule); border-radius: 6px; background: var(--paper);
 }
+textarea:focus, input:focus { outline: none; border-color: var(--pen); box-shadow: 0 0 0 3px var(--pen-weak); }
 textarea { resize: vertical; }
+::placeholder { color: #98a1ae; }
 
-pre, code { font-family: var(--mono); font-size: 12px; }
+pre, code { font-family: var(--mono); font-size: 12.5px; }
 pre {
-  background: #f8f9fb; border: 1px solid var(--border); border-radius: 6px;
-  padding: 10px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 0;
+  background: var(--paper-2); border: 1px solid var(--rule); border-radius: 6px;
+  padding: 12px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 0;
+  line-height: 1.55;
 }
 
 table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
-th { color: var(--muted); font-weight: 500; font-size: 12px; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { color: var(--ink-2); font-weight: 500; font-size: 12px; background: var(--paper-2); }
+tbody tr:hover td { background: #fafbfc; }
 
-.muted { color: var(--muted); }
+.muted { color: var(--ink-2); }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .error-box {
-  background: var(--fail-weak); color: var(--fail); border: 1px solid var(--fail);
-  border-radius: 6px; padding: 8px 12px; margin-bottom: 12px;
+  background: var(--seal-weak); color: var(--seal); border: 1px solid #efc4bf;
+  border-radius: 6px; padding: 10px 12px; margin-bottom: 12px;
 }
-.pass { color: var(--ok); font-weight: 600; }
-.fail { color: var(--fail); font-weight: 600; }
+.pass { color: var(--pass); font-weight: 600; }
+.fail { color: var(--seal); font-weight: 600; }
+
+@media (max-width: 640px) {
+  .topbar { padding: 0 16px; }
+  .topbar .brand small { display: none; }
+  .container { padding: 16px 16px 56px; }
+  .card { padding: 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
