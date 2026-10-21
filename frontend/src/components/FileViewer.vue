@@ -39,7 +39,7 @@ async function open(path) {
   <div class="viewer">
     <div v-if="error" class="error-box">{{ error }}</div>
     <ul class="list">
-      <li v-if="files.length === 0" class="muted">아직 만들어진 파일이 없습니다.</li>
+      <li v-if="files.length === 0" class="muted">남아 있는 파일이 없습니다. 작업 공간이 초기화되었을 수 있습니다.</li>
       <li v-for="f in files" :key="f.path">
         <button class="file" :class="{ on: current?.path === f.path }" @click="open(f.path)">
           <span class="name">{{ f.path }}</span>

@@ -53,13 +53,13 @@ docker compose --profile lg up -d --build postgres workspace knowledge backend f
 ```
 
 - 화면: http://localhost:5180
-- API 문서: http://localhost:8200/docs
+- API 문서: http://localhost:5180/api/docs
 
 ## 화면
 
-| 납품 검수서 · 검수 도장 | 관리자 (LangSmith) |
-|---|---|
-| ![](docs/lg/img/review.png) | ![](docs/lg/img/admin.png) |
+| 작업 지시서 (메인) | 납품 검수서 · 검수 도장 | 관리자 (LangSmith) |
+|---|---|---|
+| ![](docs/lg/img/home.png) | ![](docs/lg/img/review.png) | ![](docs/lg/img/admin.png) |
 
 ## 결과
 

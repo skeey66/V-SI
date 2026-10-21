@@ -5,6 +5,8 @@ export default defineConfig({
   plugins: [vue()],
   server: {
     port: 5180,
+    // 도커(macOS 폴더 마운트)에서는 파일 변경 알림이 누락될 수 있어 주기적으로 확인한다.
+    watch: process.env.VSI_DOCKER ? { usePolling: true, interval: 300 } : undefined,
     proxy: {
       // /api 로 시작하는 요청은 LangGraph 백엔드(lg_api)로 넘긴다.
       '/api': {

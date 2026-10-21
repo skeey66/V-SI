@@ -157,3 +157,46 @@ async def _publish_updates(run: Run, chunk: dict) -> None:
         for verdict in (update.get("verdicts") or {}).values():
             await run.publish("verdict", revision=run.revision, **verdict)
         await run.publish("node_end", node=node, status=update.get("status"))
+
+
+async def restore_runs(registry: RunRegistry, saver) -> int:
+    """재시작 뒤, 체크포인터에 남은 요구사항으로 작업 대장을 다시 채운다.
+
+    진행 타임라인(SSE 이벤트)은 메모리에만 있었으므로 되살리지 못한다. 대신 화면이
+    "끝났다"·"승인을 기다린다"를 알 수 있도록 최소한의 이벤트만 다시 만든다.
+    중간에 멈춘 실행은 `/resume` 으로 이어갈 수 있다고 알린다.
+    """
+    from datetime import datetime
+
+    latest: dict[str, tuple[float, dict]] = {}
+    first: dict[str, float] = {}
+    async for tup in saver.alist(None):
+        thread = tup.config["configurable"]["thread_id"]
+        ts = datetime.fromisoformat(tup.checkpoint["ts"]).timestamp()
+        first[thread] = min(first.get(thread, ts), ts)
+        if thread not in latest or ts > latest[thread][0]:
+            latest[thread] = (ts, tup.checkpoint.get("channel_values", {}))
+
+    restored = 0
+    for thread, (ts, values) in latest.items():
+        if registry.get(thread) or not values.get("title"):
+            continue
+        status = values.get("status", "planned")
+        run = Run(requirement_id=thread, title=values["title"], status=status,
+                  revision=values.get("revision", 1), created_at=first[thread])
+        run.events.append({"seq": 1, "type": "run_started", "ts": first[thread],
+                           "requirement_id": thread, "title": run.title})
+        if status in ("accepted", "escalated"):
+            run.events.append({"seq": 2, "type": "done", "ts": ts, "status": status,
+                               "revision": run.revision, "elapsed_s": round(ts - first[thread], 1)})
+        elif status == "blocked":
+            run.events.append({"seq": 2, "type": "interrupt", "ts": ts,
+                               "detail": (values.get("gate") or {}).get("detail", "")})
+        else:
+            run.status = "error"
+            run.events.append({"seq": 2, "type": "error", "ts": ts,
+                               "message": "서버가 재시작되어 실행이 멈췄습니다. /resume 으로 이어갈 수 있습니다."})
+        run.updated_at = ts
+        registry.add(run)
+        restored += 1
+    return restored

@@ -184,6 +184,7 @@ services:
     volumes: ["./frontend:/app", "/app/node_modules"]
     environment:
       VSI_API_URL: http://backend:8000
+      VSI_DOCKER: "1"
     command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
     depends_on: [backend]
     ports: ["127.0.0.1:5180:5180"]

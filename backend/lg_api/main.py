@@ -26,7 +26,7 @@ from lg_agent.graph import build_graph, create_checkpointer, initial_state
 from lg_agent.settings import load_settings
 from lg_api import admin
 from lg_api.admin import feedback_row
-from lg_api.runs import Run, RunRegistry, drive, graph_config
+from lg_api.runs import Run, RunRegistry, drive, graph_config, restore_runs
 
 
 class NewRequirement(BaseModel):
@@ -62,13 +62,19 @@ async def lifespan(app: FastAPI):
         app.state.deps = deps
         app.state.graph = build_graph(deps, saver)
         app.state.runs = RunRegistry()
+        if settings.checkpoint_url:  # 메모리 체크포인터는 재시작하면 비어 있다
+            await restore_runs(app.state.runs, saver)
         yield
         for run in app.state.runs.all():
             if run.task and not run.task.done():
                 run.task.cancel()
 
 
-app = FastAPI(title="V-SI LangGraph API", lifespan=lifespan)
+# 문서도 /api 아래에 둔다 — 프런트 개발 서버의 /api 프록시로 같은 주소에서 열린다.
+app = FastAPI(
+    title="V-SI LangGraph API", lifespan=lifespan,
+    docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None,
+)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.include_router(admin.router)
 

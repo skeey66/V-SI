@@ -153,3 +153,20 @@ async def test_feedback_rejects_unknown_reason_and_drops_reasons_on_approval(cli
     assert bad.status_code == 422
     ok = (await client.post(f"/api/requirements/{rid}/feedback", json={"score": 1, "reasons": ["코드 품질"]})).json()
     assert ok["score"] == 1 and ok["reasons"] == []
+
+
+async def test_restart_restores_ledger_from_checkpoints(client):
+    from lg_api.runs import restore_runs
+
+    _setup({"check_acceptance_tests": [0], "run_tests": [0], "run_security_scan": [0]})
+    done = (await client.post("/api/requirements", json={"title": "완료될 작업"})).json()["requirement_id"]
+    await asyncio.wait_for(app.state.runs.get(done).task, 10)
+    _setup_same_graph = app.state.graph  # 같은 체크포인터를 쓰는 그래프
+
+    # 재시작: 작업 대장(메모리)은 비고, 체크포인터만 남는다
+    fresh = RunRegistry()
+    assert await restore_runs(fresh, _setup_same_graph.checkpointer) == 1
+    run = fresh.get(done)
+    assert run.title == "완료될 작업" and run.status == "accepted"
+    assert [e["type"] for e in run.events] == ["run_started", "done"]
+    assert run.finished

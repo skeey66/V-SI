@@ -52,3 +52,21 @@ export function formatNumber(n) {
   if (n === null || n === undefined) return '-'
   return Number(n).toLocaleString('ko-KR')
 }
+
+// 초 단위 타임스탬프 -> "방금" / "3분 전" / "2시간 전" / 그 이전은 날짜
+export function formatAgo(ts, now = Date.now() / 1000) {
+  if (!ts) return '-'
+  const diff = Math.max(0, now - ts)
+  if (diff < 60) return '방금'
+  if (diff < 3600) return `${Math.floor(diff / 60)}분 전`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}시간 전`
+  return formatTime(ts)
+}
+
+// 상태 → 작업 현황의 네 묶음
+export function statusGroup(status) {
+  if (status === 'accepted') return 'done'
+  if (status === 'blocked') return 'waiting'
+  if (status === 'escalated' || status === 'error') return 'trouble'
+  return 'running'
+}

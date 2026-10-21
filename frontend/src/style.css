@@ -52,6 +52,8 @@ body {
   font-size: 14px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  word-break: keep-all;      /* 한국어를 어절 단위로 줄바꿈한다 */
+  overflow-wrap: anywhere;   /* 아주 긴 영문·경로는 그래도 끊는다 */
 }
 a { color: var(--pen); text-decoration: none; }
 a:hover { text-decoration: underline; text-underline-offset: 3px; }
@@ -81,7 +83,19 @@ p { margin: 0 0 8px; }
 .topbar nav a:hover { color: var(--ink); text-decoration: none; }
 .topbar nav a.router-link-exact-active { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
 
-.container { max-width: 1240px; margin: 0 auto; padding: 24px 28px 72px; }
+.container { max-width: 1240px; margin: 0 auto; padding: 24px 28px 56px; min-height: calc(100vh - 56px - 64px); }
+
+/* ── 하단 ── */
+.footer {
+  border-top: 1px solid var(--rule); background: var(--paper);
+  font-size: 12.5px; color: var(--ink-2);
+}
+.footer-inner {
+  max-width: 1240px; margin: 0 auto; padding: 20px 28px;
+  display: flex; flex-wrap: wrap; gap: 6px 20px; justify-content: space-between;
+}
+.footer-inner nav { display: flex; gap: 16px; }
+.footer a { color: var(--ink-2); }
 
 /* ── 서류(카드) ── */
 .card {
