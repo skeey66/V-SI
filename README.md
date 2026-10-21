@@ -67,7 +67,7 @@
 ### 2-1. Multi-Agent & LangGraph
 
 ```mermaid
-flowchart LR
+flowchart TD
     S([START]) --> P[planner<br/>기획]
     P --> G{gate<br/>테스트 검사}
     G -- 테스트가 제구실 함 --> D[dev<br/>개발]
@@ -113,7 +113,7 @@ MCP 서버 두 개를 씁니다.
 ### 2-3. RAG — Vector DB 기반 의미 검색과 문서 주입
 
 ```mermaid
-flowchart LR
+flowchart TD
     B[bandit FAIL 출력] --> QY[질의 생성<br/>규칙 ID + 문제 문장]
     QY --> MCP[지식 MCP 서버<br/>search_security_guide]
     MCP --> X{규칙 ID<br/>정확 매칭}
